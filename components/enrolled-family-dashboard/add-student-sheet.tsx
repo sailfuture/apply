@@ -269,11 +269,7 @@ export function AddStudentSheet({
               Cancel
             </Button>
             <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting
-                ? "Creating…"
-                : residential
-                  ? "Continue to Registration"
-                  : "Continue to Application"}
+              {submitting ? "Creating…" : "Continue"}
             </Button>
           </div>
         </form>

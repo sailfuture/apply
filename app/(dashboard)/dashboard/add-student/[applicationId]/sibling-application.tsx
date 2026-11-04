@@ -4,6 +4,10 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock, Loader2, Undo2 } from "lucide-react";
+import {
+  ApplicationSideNavPanel,
+  type SideNavStepItem,
+} from "@/components/application-side-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -63,10 +67,10 @@ export interface SiblingApp
 
 type Step = "details" | "financial-aid" | "testing";
 
-const STEPS: { key: Step; label: string }[] = [
-  { key: "details", label: "Student Details" },
-  { key: "financial-aid", label: "Financial Aid" },
-  { key: "testing", label: "Initial Testing" },
+const STEPS: { key: Step; label: string; short: string }[] = [
+  { key: "details", label: "Student Details", short: "Students" },
+  { key: "financial-aid", label: "Financial Aid", short: "Financial Aid" },
+  { key: "testing", label: "Initial Testing", short: "Testing" },
 ];
 
 export function SiblingApplication({
@@ -80,6 +84,7 @@ export function SiblingApplication({
   busStops: BusStop[];
   hasPacket: boolean;
 }) {
+  const router = useRouter();
   const [app, setApp] = useState<SiblingApp>(initialApp);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -101,6 +106,16 @@ export function SiblingApplication({
       filled(app.describe_student_strengths) &&
       filled(app.describe_student_opportunities_for_growth) &&
       (!app.is_bus_transportation || filled(app.bus_stop))
+    );
+  }, [app]);
+  const detailsStarted = useMemo(() => {
+    const filled = (v: string) => !!v && v.trim().length > 0;
+    return (
+      filled(app.current_previous_school) ||
+      filled(app.last_grade_completed) ||
+      filled(app.current_grade) ||
+      filled(app.describe_student_strengths) ||
+      filled(app.describe_student_opportunities_for_growth)
     );
   }, [app]);
   const financialAidComplete = app.addition_financial_aid_completed === true;
@@ -257,38 +272,56 @@ export function SiblingApplication({
     );
   }
 
-  return (
-    <PageShell>
-      <div>
-        <BackToDashboard />
-        <h1 className="text-2xl font-semibold mt-4">Apply for {studentName}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Complete these three steps, then submit {studentName}&rsquo;s
-          application for admissions review. Your other students stay
-          enrolled while it&rsquo;s reviewed.
-        </p>
-      </div>
+  // Same side nav as the family application: three steps plus the
+  // blue Submit row. Submit runs the real submission when every step
+  // is done, otherwise jumps to the first unfinished step.
+  const completedCount = STEPS.filter((st) => stepComplete[st.key]).length;
+  const navItems: SideNavStepItem[] = STEPS.map((st, i) => ({
+    key: st.key,
+    number: i + 1,
+    label: st.short,
+    status: stepComplete[st.key]
+      ? "complete"
+      : st.key === "details" && detailsStarted
+        ? "in_progress"
+        : "not_started",
+    active: st.key === step,
+    onClick: () => goTo(st.key),
+  }));
+  function handleNavSubmit() {
+    if (completedCount === STEPS.length) {
+      void handleSubmit();
+      return;
+    }
+    goTo(STEPS.find((st) => !stepComplete[st.key])?.key ?? "testing");
+    toast.error("Please complete every step before submitting.");
+  }
 
-      {isReturnedAddition(app) ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <Undo2 className="size-4 shrink-0 mt-0.5" />
-          <span>
-            Our admissions team sent this application back for a few
-            changes — check your email for their note, update it, and submit
-            it again.
-          </span>
-        </div>
-      ) : null}
+  const returnedBanner = isReturnedAddition(app) ? (
+    <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <Undo2 className="size-4 shrink-0 mt-0.5" />
+      <span>
+        Our admissions team sent this application back for a few changes —
+        check your email for their note, update it, and submit it again.
+      </span>
+    </div>
+  ) : null;
 
+  // Below xl the side nav is hidden (as in the family application), so
+  // the step list and the way back to the dashboard sit above the
+  // content instead.
+  const mobileNav = (
+    <>
+      <BackToDashboard />
       <ol className="grid gap-2 sm:grid-cols-3">
-        {STEPS.map((s, i) => {
-          const active = s.key === step;
-          const done = stepComplete[s.key];
+        {STEPS.map((st, i) => {
+          const active = st.key === step;
+          const done = stepComplete[st.key];
           return (
-            <li key={s.key}>
+            <li key={st.key}>
               <button
                 type="button"
-                onClick={() => goTo(s.key)}
+                onClick={() => goTo(st.key)}
                 className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors ${
                   active
                     ? "border-primary bg-primary/5 font-medium"
@@ -302,114 +335,253 @@ export function SiblingApplication({
                     {i + 1}
                   </span>
                 )}
-                <span className="truncate">{s.label}</span>
+                <span className="truncate">{st.label}</span>
               </button>
             </li>
           );
         })}
       </ol>
+    </>
+  );
 
-      {step === "details" ? (
-        <>
-          <StudentDetailsCard app={app} setField={setField} busStops={busStops} />
-          <div className="flex items-center justify-end gap-3">
-            <Button
-              variant="outline"
-              className="bg-white"
-              onClick={() => handleSave()}
-              disabled={saving}
-            >
-              Save for Later
-            </Button>
-            <Button onClick={() => handleSave("financial-aid")} disabled={saving}>
-              {saving ? "Saving…" : "Continue"}
+  let content: ReactNode = null;
+  let actions: ReactNode = null;
+
+  if (step === "details") {
+    content = (
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <StepHeader
+          eyebrow="Student Details"
+          title={`Complete ${studentName}'s academic and background information to continue.`}
+        />
+        {returnedBanner}
+        <StudentDetailsCard app={app} setField={setField} busStops={busStops} />
+      </div>
+    );
+    actions = (
+      <>
+        <Button
+          variant="outline"
+          className="flex-1 xl:flex-none min-w-0 py-2.5 bg-white"
+          onClick={() => handleSave()}
+          disabled={saving}
+        >
+          <span className="truncate">Save for Later</span>
+        </Button>
+        <Button
+          className="flex-1 min-w-0 py-2.5"
+          onClick={() => handleSave("financial-aid")}
+          disabled={saving}
+        >
+          {saving ? (
+            <>
+              <Loader2 className="size-4 mr-1.5 shrink-0 animate-spin" />
+              Saving...
+            </>
+          ) : (
+            <>
+              Continue
               <ArrowRight className="size-4 ml-1.5" />
-            </Button>
-          </div>
-        </>
-      ) : null}
-
-      {step === "financial-aid" ? (
-        // Its own flow provider: the step registers its Complete-section
-        // handler + options there, and FinancialAidFooter renders them
-        // the way the apply layout's bottom bar does.
-        <ApplicationFlowProvider>
-          <DimWhenCompleted>
-            <FinancialAidStep
-              yearId={app.registration_school_years_id}
-              addition={{
-                applicationId: app.id,
-                completed: financialAidComplete,
-                onCompletedChange: setFinancialAidCompleted,
-              }}
-            />
-          </DimWhenCompleted>
-          <FinancialAidFooter
-            onBack={() => goTo("details")}
-            onContinue={() => goTo("testing")}
-            canContinue={financialAidComplete}
+            </>
+          )}
+        </Button>
+      </>
+    );
+  } else if (step === "financial-aid") {
+    // The step renders its own header and registers its Complete-section
+    // handler on the flow provider wrapped around the whole shell below;
+    // FinancialAidActions reads it back into the bottom bar the way the
+    // apply layout does.
+    content = (
+      <>
+        {returnedBanner ? (
+          <div className="px-6 pt-6">{returnedBanner}</div>
+        ) : null}
+        <DimWhenCompleted>
+          <FinancialAidStep
+            yearId={app.registration_school_years_id}
+            addition={{
+              applicationId: app.id,
+              completed: financialAidComplete,
+              onCompletedChange: setFinancialAidCompleted,
+            }}
           />
-        </ApplicationFlowProvider>
-      ) : null}
+        </DimWhenCompleted>
+      </>
+    );
+    actions = (
+      <FinancialAidActions
+        onBack={() => goTo("details")}
+        onContinue={() => goTo("testing")}
+        canContinue={financialAidComplete}
+      />
+    );
+  } else {
+    content = (
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <StepHeader
+          eyebrow="Initial Testing"
+          title={`Schedule ${studentName}'s NWEA testing at SailFuture Academy.`}
+        />
+        {returnedBanner}
+        <NweaTestingCard
+          app={app}
+          setField={setField}
+          onSchedule={() => setScheduleDialogOpen(true)}
+        />
+        {!(detailsComplete && financialAidComplete) ? (
+          <p className="text-sm text-muted-foreground">
+            Still to finish before you can submit:{" "}
+            {[
+              !detailsComplete ? "Student Details" : null,
+              !financialAidComplete ? "Financial Aid" : null,
+            ]
+              .filter(Boolean)
+              .join(" and ")}
+            .
+          </p>
+        ) : null}
+      </div>
+    );
+    actions = (
+      <>
+        <Button
+          variant="outline"
+          className="hidden xl:inline-flex min-w-0 py-2.5 bg-white"
+          onClick={() => goTo("financial-aid")}
+          disabled={saving || submitting}
+        >
+          <ArrowLeft className="size-4 mr-1.5 shrink-0" />
+          Back
+        </Button>
+        <Button
+          variant="outline"
+          className="flex-1 xl:flex-none min-w-0 py-2.5 bg-white"
+          onClick={() => handleSave()}
+          disabled={saving || submitting}
+        >
+          <span className="truncate xl:hidden">Save</span>
+          <span className="hidden xl:inline">Save for Later</span>
+        </Button>
+        <Button
+          className="flex-1 min-w-0 py-2.5"
+          onClick={handleSubmit}
+          disabled={
+            saving ||
+            submitting ||
+            !detailsComplete ||
+            !financialAidComplete ||
+            !testingComplete
+          }
+        >
+          <span className="truncate xl:hidden">
+            {submitting ? "Submitting…" : "Submit"}
+          </span>
+          <span className="hidden xl:inline">
+            {submitting ? "Submitting…" : "Submit for Admissions Review"}
+          </span>
+        </Button>
+      </>
+    );
+  }
 
-      {step === "testing" ? (
-        <>
-          <NweaTestingCard
-            app={app}
-            setField={setField}
-            onSchedule={() => setScheduleDialogOpen(true)}
+  return (
+    <ApplicationFlowProvider>
+      <FlowShell
+        nav={
+          <ApplicationSideNavPanel
+            items={navItems}
+            submit={{
+              label: "Submit",
+              completed: completedCount,
+              total: STEPS.length,
+              onClick: handleNavSubmit,
+            }}
+            onDashboard={() => router.push("/dashboard")}
           />
-          {!(detailsComplete && financialAidComplete) ? (
-            <p className="text-sm text-muted-foreground">
-              Still to finish before you can submit:{" "}
-              {[
-                !detailsComplete ? "Student Details" : null,
-                !financialAidComplete ? "Financial Aid" : null,
-              ]
-                .filter(Boolean)
-                .join(" and ")}
-              .
-            </p>
-          ) : null}
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <Button
-              variant="outline"
-              className="bg-white mr-auto"
-              onClick={() => goTo("financial-aid")}
-              disabled={saving || submitting}
-            >
-              <ArrowLeft className="size-4 mr-1.5" />
-              Back
-            </Button>
-            <Button
-              variant="outline"
-              className="bg-white"
-              onClick={() => handleSave()}
-              disabled={saving || submitting}
-            >
-              Save for Later
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={
-                saving ||
-                submitting ||
-                !detailsComplete ||
-                !financialAidComplete ||
-                !testingComplete
-              }
-            >
-              {submitting ? "Submitting…" : "Submit for Admissions Review"}
-            </Button>
-          </div>
-        </>
-      ) : null}
+        }
+        mobileNav={mobileNav}
+        actions={actions}
+      >
+        {content}
+      </FlowShell>
 
       <NweaBookingDialog
         open={scheduleDialogOpen}
         onOpenChange={setScheduleDialogOpen}
       />
-    </PageShell>
+    </ApplicationFlowProvider>
+  );
+}
+
+/**
+ * The family application's page frame (`/apply/year/[yearId]/layout.tsx`)
+ * reproduced for this single-student flow: side nav on the left of a
+ * centered column, the step's content, then its actions — inline under
+ * the content at xl+, fixed to the bottom of the viewport below that.
+ */
+function FlowShell({
+  nav,
+  mobileNav,
+  actions,
+  children,
+}: {
+  nav: ReactNode;
+  mobileNav: ReactNode;
+  actions: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="min-h-[calc(100vh-7.5rem)] flex flex-col">
+      <div className="flex-1 flex justify-center px-4 lg:px-6">
+        <div className="flex w-full gap-6 max-w-[980px]">
+          {nav}
+          {/* Bottom padding below xl keeps the fixed action bar off the
+              last card. */}
+          <main className="flex-1 min-w-0 pb-24 xl:pb-0">
+            <div className="xl:hidden flex flex-col gap-4 px-6 pt-6">
+              {mobileNav}
+            </div>
+            {children}
+            <div className="hidden xl:flex mx-auto w-full max-w-4xl items-center gap-2 border-t pt-6 px-6 pb-6">
+              {actions}
+            </div>
+            <div className="xl:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background">
+              <div className="mx-auto w-full max-w-4xl flex items-stretch gap-2 px-3 py-3">
+                {actions}
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The step pages' header: eyebrow label over a one-line instruction. */
+function StepHeader({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 pb-3 border-b">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          {eyebrow}
+        </p>
+      </div>
+      <h1 className="text-2xl font-semibold mt-4">{title}</h1>
+      {description ? (
+        <p className="text-sm text-muted-foreground mt-2 max-w-3xl">
+          {description}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -453,11 +625,11 @@ function DimWhenCompleted({ children }: { children: ReactNode }) {
 }
 
 /**
- * The Financial Aid step's actions — mirrors the apply layout's bottom
- * bar (Complete section / Completed, click to edit) plus this flow's
- * Back and Continue.
+ * The Financial Aid step's actions — the apply layout's bottom-bar
+ * button (Complete section / Completed, click to edit) plus this flow's
+ * Back and Continue. Rendered into both the inline and the fixed bar.
  */
-function FinancialAidFooter({
+function FinancialAidActions({
   onBack,
   onContinue,
   canContinue,
@@ -485,51 +657,58 @@ function FinancialAidFooter({
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-3 border-t pt-6">
-        <Button
-          variant="outline"
-          className="bg-white"
-          // Inside the full Opportunity Scholarship form, Back returns to
-          // the path chooser first (the step registers that handler).
-          onClick={() => (stepBack ? stepBack() : onBack())}
+      <Button
+        variant="outline"
+        className="min-w-0 py-2.5 bg-white"
+        // Inside the full Opportunity Scholarship form, Back returns to
+        // the path chooser first (the step registers that handler).
+        onClick={() => (stepBack ? stepBack() : onBack())}
+      >
+        <ArrowLeft className="size-4 xl:mr-1.5 shrink-0" />
+        <span className="hidden xl:inline">Back</span>
+      </Button>
+      {saveOptions.completed ? (
+        <button
+          className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-md bg-white border border-input px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors cursor-pointer"
+          onClick={() => saveOptions.onUnlock && setUnlockOpen(true)}
         >
-          <ArrowLeft className="size-4 mr-1.5" />
-          Back
-        </Button>
-        <div className="flex-1" />
-        {saveOptions.completed ? (
-          <Button
-            variant="outline"
-            className="bg-white"
-            onClick={() => saveOptions.onUnlock && setUnlockOpen(true)}
-          >
-            <CheckCircle2 className="size-4 text-green-600 mr-1.5" />
+          <CheckCircle2 className="size-4 text-green-600 shrink-0" />
+          <span className="truncate">
             {saveOptions.completedLabel ?? "Section Completed"}
             <span className="ml-1.5 text-xs font-normal text-muted-foreground">
               (Click to Edit)
             </span>
-          </Button>
-        ) : saveOptions.label ? (
-          <Button
-            variant={saveOptions.disabled ? "outline" : "default"}
-            onClick={saveHandler && !saveOptions.disabled ? handleComplete : undefined}
-            disabled={saveHandler ? saveOptions.disabled || busy : false}
-          >
-            {busy ? (
-              <>
-                <Loader2 className="size-4 mr-1.5 animate-spin" />
+          </span>
+        </button>
+      ) : saveOptions.label ? (
+        <Button
+          variant={saveOptions.disabled ? "outline" : "default"}
+          className={`flex-1 min-w-0 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
+          onClick={saveHandler && !saveOptions.disabled ? handleComplete : undefined}
+          disabled={saveHandler ? saveOptions.disabled || busy : false}
+        >
+          {busy ? (
+            <>
+              <Loader2 className="size-4 mr-1.5 shrink-0 animate-spin" />
+              <span className="truncate">
                 {saveOptions.saving ? "Saving..." : "Working..."}
-              </>
-            ) : (
-              saveOptions.label
-            )}
-          </Button>
-        ) : null}
-        <Button onClick={onContinue} disabled={!canContinue}>
-          Continue
-          <ArrowRight className="size-4 ml-1.5" />
+              </span>
+            </>
+          ) : (
+            <span className="truncate">{saveOptions.label}</span>
+          )}
         </Button>
-      </div>
+      ) : (
+        <div className="flex-1 min-w-0 h-10 rounded-md bg-muted animate-pulse" />
+      )}
+      <Button
+        className="min-w-0 py-2.5"
+        onClick={onContinue}
+        disabled={!canContinue}
+      >
+        Continue
+        <ArrowRight className="size-4 ml-1.5 shrink-0" />
+      </Button>
 
       <AlertDialog open={unlockOpen} onOpenChange={setUnlockOpen}>
         <AlertDialogContent>

@@ -69,30 +69,40 @@ function StepCircle({ number, status }: { number: number; status: StepStatus }) 
   );
 }
 
-export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; onSubmitClick?: () => void }) {
-  const pathname = usePathname();
-  const router = useRouter();
-  const { hideChrome } = useApplicationFlow();
-  const { steps, registrationSteps, stepsLoading } = useApplicationSteps(yearId);
+export interface SideNavStepItem {
+  key: string | number;
+  number: number;
+  label: string;
+  status: StepStatus;
+  active: boolean;
+  onClick: () => void;
+}
 
-  // Count completed registration steps (excluding submit)
-  const regStepsExcludingSubmit = registrationSteps.filter((s) => s.title !== "Submit Registration");
-  const regCompletedCount = regStepsExcludingSubmit.filter((s) => s.status === "complete").length;
-  const regTotalCount = regStepsExcludingSubmit.length;
+export interface SideNavSubmitItem {
+  label: string;
+  completed: number;
+  total: number;
+  onClick: () => void;
+}
 
-  const basePath = `/apply/year/${yearId}`;
-  const isOverview = pathname === basePath || pathname === `${basePath}/`;
-
-  if (isOverview || hideChrome) return null;
-
-  const currentSegment = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0] || "";
-
-  // Determine which step set to show based on current page
-  const isRegistrationPage = REGISTRATION_SEGMENTS.has(currentSegment);
-  const activeSteps = isRegistrationPage ? registrationSteps : steps;
-  const segmentMap = isRegistrationPage ? REGISTRATION_SEGMENT_MAP : APPLICATION_SEGMENT_MAP;
-  const activeStepNumber = segmentMap[currentSegment] ?? -1;
-
+/**
+ * The side nav's rendering with the step list handed in. The family
+ * application below derives its steps from the year's progress rows;
+ * the mid-year sibling application (`/dashboard/add-student/[id]`)
+ * builds its own three-step list and renders this same panel so both
+ * flows look alike.
+ */
+export function ApplicationSideNavPanel({
+  items,
+  submit,
+  loading = false,
+  onDashboard,
+}: {
+  items: SideNavStepItem[];
+  submit?: SideNavSubmitItem;
+  loading?: boolean;
+  onDashboard: () => void;
+}) {
   return (
     // The `<aside>` is a width-reserving placeholder in the flex layout
     // — it keeps the main content from sliding left into the side nav's
@@ -126,7 +136,7 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
             <div className="divide-y">
               {/* Dashboard row */}
               <button
-                onClick={() => router.push(basePath)}
+                onClick={onDashboard}
                 className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors hover:bg-muted/30"
               >
                 <div className="flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/30 text-muted-foreground">
@@ -134,78 +144,70 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
                 </div>
                 <span className="truncate font-medium text-muted-foreground">Dashboard</span>
               </button>
-              {stepsLoading
-                ? Array.from({ length: activeSteps.length || 3 }).map((_, i) => (
-                    <div key={i} className="flex items-center gap-3 px-3 py-3">
-                      <div className="size-8 rounded-full bg-muted animate-pulse" />
-                      <div className="h-4 w-20 rounded bg-muted animate-pulse" />
-                    </div>
-                  ))
-                : activeSteps.map((step) => {
-                    const isActive = step.number === activeStepNumber;
-                    const isComplete = step.status === "complete";
-                    const isSubmit = step.title === "Submit Registration" || step.title === "Submit Application";
-                    const label = SHORT_LABELS[step.title] ?? step.title;
-
-                    if (isSubmit) {
-                      // Both Submit Application (application phase) and
-                      // Submit Registration (registration phase) open the
-                      // pre-submit review modal via the layout callback —
-                      // the layout decides which set of sections to show
-                      // based on which phase the user is in.
-                      return (
-                        <button
-                          key={step.number}
-                          type="button"
-                          onClick={(e) => {
-                            // Blur the trigger before opening the modal.
-                            // Without this, Radix Dialog's focus-restoration
-                            // on close calls `scrollIntoView` on this button —
-                            // which is inside a sticky container, so the
-                            // viewport scrolls and the side nav appears to
-                            // jump. Blurring drops the trigger from focus
-                            // history so Radix has nothing to restore back to.
-                            e.currentTarget.blur();
-                            if (onSubmitClick) {
-                              onSubmitClick();
-                            } else if (step.href && step.href !== "#") {
-                              router.push(step.href);
-                            }
-                          }}
-                          className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors bg-blue-600 hover:bg-blue-700 cursor-pointer"
-                        >
-                          <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white/20">
-                            <svg className="size-3 text-white" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" />
-                            </svg>
-                          </div>
-                          <span className="truncate font-medium text-white">
-                            {label}
-                            <span className="ml-1.5 text-white/70 text-xs font-normal">
-                              ({activeSteps.filter((s) => s.status === "complete" && s.title !== "Submit Registration" && s.title !== "Submit Application").length}/{activeSteps.filter((s) => s.title !== "Submit Registration" && s.title !== "Submit Application").length})
-                            </span>
-                          </span>
-                        </button>
-                      );
-                    }
-
-                    return (
-                      <button
-                        key={step.number}
-                        onClick={() => router.push(step.href)}
-                        className={`flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors ${
-                          isActive
-                            ? "bg-muted/40 hover:bg-muted/60"
-                            : "hover:bg-muted/30"
+              {loading ? (
+                Array.from({
+                  length: items.length + (submit ? 1 : 0) || 3,
+                }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-3">
+                    <div className="size-8 rounded-full bg-muted animate-pulse" />
+                    <div className="h-4 w-20 rounded bg-muted animate-pulse" />
+                  </div>
+                ))
+              ) : (
+                <>
+                  {items.map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={item.onClick}
+                      className={`flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors ${
+                        item.active
+                          ? "bg-muted/40 hover:bg-muted/60"
+                          : "hover:bg-muted/30"
+                      }`}
+                    >
+                      <StepCircle number={item.number} status={item.status} />
+                      <span
+                        className={`truncate ${
+                          item.active
+                            ? "font-semibold text-foreground"
+                            : "font-medium text-muted-foreground"
                         }`}
                       >
-                        <StepCircle number={step.number} status={step.status} />
-                        <span className={`truncate ${isActive ? "font-semibold text-foreground" : "font-medium text-muted-foreground"}`}>
-                          {label}
+                        {item.label}
+                      </span>
+                    </button>
+                  ))}
+                  {submit ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        // Blur the trigger before opening the modal.
+                        // Without this, Radix Dialog's focus-restoration
+                        // on close calls `scrollIntoView` on this button —
+                        // which is inside a sticky container, so the
+                        // viewport scrolls and the side nav appears to
+                        // jump. Blurring drops the trigger from focus
+                        // history so Radix has nothing to restore back to.
+                        e.currentTarget.blur();
+                        submit.onClick();
+                      }}
+                      className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                    >
+                      <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white/20">
+                        <svg className="size-3 text-white" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                      <span className="truncate font-medium text-white">
+                        {submit.label}
+                        <span className="ml-1.5 text-white/70 text-xs font-normal">
+                          ({submit.completed}/{submit.total})
                         </span>
-                      </button>
-                    );
-                  })}
+                      </span>
+                    </button>
+                  ) : null}
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -246,5 +248,67 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
         </div>
       </div>
     </aside>
+  );
+}
+
+const isSubmitStep = (title: string) =>
+  title === "Submit Registration" || title === "Submit Application";
+
+export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; onSubmitClick?: () => void }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { hideChrome } = useApplicationFlow();
+  const { steps, registrationSteps, stepsLoading } = useApplicationSteps(yearId);
+
+  const basePath = `/apply/year/${yearId}`;
+  const isOverview = pathname === basePath || pathname === `${basePath}/`;
+
+  if (isOverview || hideChrome) return null;
+
+  const currentSegment = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0] || "";
+
+  // Determine which step set to show based on current page
+  const isRegistrationPage = REGISTRATION_SEGMENTS.has(currentSegment);
+  const activeSteps = isRegistrationPage ? registrationSteps : steps;
+  const segmentMap = isRegistrationPage ? REGISTRATION_SEGMENT_MAP : APPLICATION_SEGMENT_MAP;
+  const activeStepNumber = segmentMap[currentSegment] ?? -1;
+
+  const items: SideNavStepItem[] = activeSteps
+    .filter((step) => !isSubmitStep(step.title))
+    .map((step) => ({
+      key: step.number,
+      number: step.number,
+      label: SHORT_LABELS[step.title] ?? step.title,
+      status: step.status,
+      active: step.number === activeStepNumber,
+      onClick: () => router.push(step.href),
+    }));
+  // Both Submit Application (application phase) and Submit Registration
+  // (registration phase) open the pre-submit review modal via the
+  // layout callback — the layout decides which set of sections to show
+  // based on which phase the user is in.
+  const submitStep = activeSteps.find((step) => isSubmitStep(step.title));
+  const submit: SideNavSubmitItem | undefined = submitStep
+    ? {
+        label: SHORT_LABELS[submitStep.title] ?? submitStep.title,
+        completed: items.filter((i) => i.status === "complete").length,
+        total: items.length,
+        onClick: () => {
+          if (onSubmitClick) {
+            onSubmitClick();
+          } else if (submitStep.href && submitStep.href !== "#") {
+            router.push(submitStep.href);
+          }
+        },
+      }
+    : undefined;
+
+  return (
+    <ApplicationSideNavPanel
+      items={items}
+      submit={submit}
+      loading={stepsLoading}
+      onDashboard={() => router.push(basePath)}
+    />
   );
 }

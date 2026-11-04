@@ -1185,6 +1185,15 @@ export function FinancialAidStep({
 
   const handleCompleteScholarshipRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteScholarshipRef.current = async () => {
+    if (addition) {
+      // Mid-year sibling: the family's Opportunity Scholarship path was
+      // chosen (and priced) in the original application and is shown
+      // read-only here, so there's nothing to validate or re-save —
+      // only this student's SUFS Award ID, which saves on blur.
+      await setScholarshipLocked(true);
+      toast.success("Financial aid section completed.");
+      return;
+    }
     if (!scholarshipChoice) {
       toast.error("Please select a financial aid option before completing this section.");
       throw new Error("Validation failed");
@@ -1745,14 +1754,30 @@ export function FinancialAidStep({
               </p>
               <GlobalSaveStatusPill />
             </div>
-            <h1 className="text-2xl font-semibold mt-4">
-              Complete both scholarship steps to maximize your tuition assistance.
-            </h1>
-            <p className="text-muted-foreground text-sm mt-2 max-w-2xl">
-              Most families qualify for state-funded scholarships and may be
-              eligible for additional support from SailFuture. Complete both
-              steps below to maximize your tuition assistance.
-            </p>
+            {addition ? (
+              <>
+                <h1 className="text-2xl font-semibold mt-4">
+                  Enter this student&apos;s Step Up award if they have one.
+                </h1>
+                <p className="text-muted-foreground text-sm mt-2 max-w-2xl">
+                  Your family&apos;s SailFuture Opportunity Scholarship choice
+                  carries over from your application, so there&apos;s nothing
+                  to redo there — just add the new student&apos;s Step Up For
+                  Students Award ID below if the state has issued one.
+                </p>
+              </>
+            ) : (
+              <>
+                <h1 className="text-2xl font-semibold mt-4">
+                  Complete both scholarship steps to maximize your tuition assistance.
+                </h1>
+                <p className="text-muted-foreground text-sm mt-2 max-w-2xl">
+                  Most families qualify for state-funded scholarships and may be
+                  eligible for additional support from SailFuture. Complete both
+                  steps below to maximize your tuition assistance.
+                </p>
+              </>
+            )}
           </div>
 
           {/* SUFS — rendered at the top even before the Opportunity Scholarship chooser */}
@@ -1761,6 +1786,53 @@ export function FinancialAidStep({
           {/* Horizontal divider between SUFS and Opportunity Scholarship */}
           <Separator />
 
+          {addition ? (
+            // Mid-year sibling: the Opportunity Scholarship path belongs
+            // to the family and was settled (and priced) in the original
+            // application — show it, don't ask again.
+            <div className="w-full">
+              <div className="flex items-center gap-3 mb-2">
+                <Image
+                  src="/logo.svg"
+                  alt="SailFuture Academy"
+                  width={36}
+                  height={36}
+                  className="size-9 rounded-full border-4 border-gray-200"
+                />
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  SailFuture Opportunity Scholarship
+                </p>
+              </div>
+              <h2 className="text-2xl font-semibold">
+                Step 2: Your family&apos;s Opportunity Scholarship
+              </h2>
+              <Card className="overflow-hidden gap-0 py-0 mt-4">
+                <CardContent className="flex items-start gap-3 py-5 bg-white dark:bg-background">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+                    <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-medium">
+                      {scholarshipChoice === "none"
+                        ? "Not participating"
+                        : scholarshipChoice === "snap"
+                          ? "SNAP benefits / Free or Reduced Meal verification"
+                          : scholarshipChoice === "full"
+                            ? "SailFuture Opportunity Scholarship application"
+                            : "Set in your family\u2019s application"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      This was chosen in your family&apos;s application and
+                      applies to every student, including the one you&apos;re
+                      adding. To change it, contact admissions.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
           <div className="w-full">
           <div className="text-left mb-8">
             <div className="flex items-center gap-3 mb-2">
@@ -1926,6 +1998,7 @@ export function FinancialAidStep({
 
 
         </div>
+          )}
 
         {/* Switch Selection Warning Modal — fires when clicking a row that
             differs from the current choice. */}
