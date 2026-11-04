@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { residentialStudentIds } from "@/lib/residential-students";
 import { leadConvertedFamilyId } from "@/lib/lead-conversion";
 
 /**
@@ -38,6 +39,7 @@ async function handleGET(req: NextRequest) {
       studentsResult,
       toursResult,
       progressResult,
+      familiesResult,
     ] = await Promise.allSettled([
       xano.applications.getAll(),
       xano.inquiries.getAll(),
@@ -48,6 +50,9 @@ async function handleGET(req: NextRequest) {
       // /admin/applications page buckets, so the dashboard's Apps
       // tile and that page can't disagree on counts.
       xano.familyApplicationProgress.getAll(),
+      // Only read for the `is_residential` flag — residential
+      // students are left out of the Enrolled tile.
+      xano.families.getAll(),
     ]);
 
     if (appsResult.status === "rejected") {
@@ -120,8 +125,11 @@ async function handleGET(req: NextRequest) {
             id: number;
             isEnrolled?: boolean;
             isArchived?: boolean;
+            registration_families_id?: number;
           }>)
         : [];
+    const families =
+      familiesResult.status === "fulfilled" ? familiesResult.value : [];
 
     // Hide soft-deleted (`isActive=false`) applications from every
     // dashboard count. Treat `undefined` as active so legacy rows
@@ -161,8 +169,19 @@ async function handleGET(req: NextRequest) {
     const enrollmentScope = yearStudentIds
       ? students.filter((s) => yearStudentIds.has(s.id))
       : students;
+    // Residential / foster placements are not recruited enrollment, so
+    // the Enrolled tile (like the dashboard roster curve and the
+    // Billing page) leaves them out. Withdrawn still counts everyone.
+    const residential = residentialStudentIds(
+      families,
+      students,
+      activeApplications
+    );
     const enrolledCount = enrollmentScope.filter(
-      (s) => s.isEnrolled === true && s.isArchived !== true
+      (s) =>
+        s.isEnrolled === true &&
+        s.isArchived !== true &&
+        !residential.has(s.id)
     ).length;
     const withdrawnCount = enrollmentScope.filter(
       (s) => s.isArchived === true

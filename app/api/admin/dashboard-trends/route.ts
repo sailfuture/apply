@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { residentialStudentIds } from "@/lib/residential-students";
 
 /**
  * Trend series for the admin dashboard charts, over a selectable
@@ -84,18 +85,22 @@ async function handleGET(req: NextRequest) {
 
     // Every read is isolated: one failing table degrades its own
     // series to zeros rather than 500-ing the whole dashboard.
-    const [inquiriesRes, packetsRes, studentsRes, appsRes] =
+    const [inquiriesRes, packetsRes, studentsRes, appsRes, familiesRes] =
       await Promise.allSettled([
         xano.inquiries.getAll(),
         xano.studentRegistration.getAll(),
         xano.students.getAll(),
         xano.applications.getAll(),
+        // Only read for the `is_residential` flag — residential
+        // students are left out of the roster curve.
+        xano.families.getAll(),
       ]);
     for (const [label, r] of [
       ["inquiries", inquiriesRes],
       ["packets", packetsRes],
       ["students", studentsRes],
       ["applications", appsRes],
+      ["families", familiesRes],
     ] as const) {
       if (r.status === "rejected") {
         console.error(
@@ -110,6 +115,8 @@ async function handleGET(req: NextRequest) {
     const students =
       studentsRes.status === "fulfilled" ? studentsRes.value : [];
     const apps = appsRes.status === "fulfilled" ? appsRes.value : [];
+    const families =
+      familiesRes.status === "fulfilled" ? familiesRes.value : [];
 
     // Window: the last `windowDays` UTC days, ending today (inclusive).
     const now = Date.now();
@@ -172,11 +179,15 @@ async function handleGET(req: NextRequest) {
     // curve — a withdrawn student shouldn't leave a permanent bump in
     // the history. (Withdrawals have no per-year timestamp to
     // subtract at the right point, so the honest reading is "current
-    // roster, by when each member joined".)
+    // roster, by when each member joined".) Residential / foster
+    // placements are not part of the recruited roster, so they are
+    // left out — see `residentialStudentIds`.
+    const residential = residentialStudentIds(families, students, activeApps);
     const enrolledNow = students.filter(
       (s) =>
         s.isEnrolled === true &&
         s.isArchived !== true &&
+        !residential.has(s.id) &&
         (!yearStudentIds || yearStudentIds.has(s.id))
     );
 
