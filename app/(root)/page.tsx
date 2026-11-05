@@ -14,15 +14,6 @@ import {
  * straight to the lifecycle destination, so the destination pages'
  * own stage detection has nothing left to correct.
  *
- * How that redirect reaches the browser: `app/loading.tsx` wraps this
- * page in a Suspense boundary, so Next streams the shell (spinner)
- * first and delivers the redirect inside the stream. The client
- * router replays it as a `replace` when the parent arrived by client
- * navigation (Clerk's post-sign-in push), and a meta refresh forces a
- * full navigation on a document load. It is NOT an HTTP 307; moving
- * this resolver out from under the loading boundaries would make it
- * one.
- *
  * This page lives in its own `(root)` route group on purpose: no
  * `loading.tsx` sits between it and the root layout. A `loading.tsx`
  * is a Suspense boundary, and a `redirect()` thrown inside one never
@@ -31,9 +22,13 @@ import {
  * stream, which the client replays as `router.replace` (or, on a
  * document load, as a 1-second `<meta http-equiv="refresh">` plus a
  * hard navigation). With no boundary above it the redirect fails the
- * shell and Next answers with a real 307 + `Location`, so sign-in
- * lands on the destination in one hop. Keep this group free of
- * `loading.tsx`.
+ * shell, so a document load of `/` (bookmark, refresh, home-screen
+ * icon) gets a real 307 + `Location` and lands on the destination
+ * with no spinner frame. A client-side arrival (Clerk's post-sign-in
+ * push to `/`) fetches an RSC payload instead, and the router still
+ * replays the redirect from it as a single `replace`; the destination
+ * it names is final, so nothing downstream redirects again. Keep this
+ * group free of `loading.tsx`.
  *
  * Resolution order (first match wins):
  *   1. Not signed in            → /sign-in
