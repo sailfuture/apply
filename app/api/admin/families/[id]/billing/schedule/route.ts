@@ -147,15 +147,18 @@ async function handleGET(
     // Start Monthly Billing, and a running subscription's next invoice
     // lands at the current period's end. One Stripe read, best-effort —
     // a bare "Scheduled" (as before) on any failure.
+    // The same read says whether that invoice already exists as a
+    // Stripe draft; if so the row can offer Cancel before it sends.
     let scheduledSendsAt: number | null = null;
+    let scheduledDraft: ScheduleSlot["scheduledDraft"] = null;
     if (nextScheduledIdx >= 0) {
       const subId = activeStripeSubscriptionId(
         paymentRow?.stripe_subscription_id
       );
       if (subId) {
-        scheduledSendsAt = await getNextInvoiceTiming(subId)
-          .then((t) => t?.sendsAtMs ?? null)
-          .catch(() => null);
+        const timing = await getNextInvoiceTiming(subId).catch(() => null);
+        scheduledSendsAt = timing?.sendsAtMs ?? null;
+        scheduledDraft = timing?.draft ?? null;
       }
     }
 
@@ -171,6 +174,7 @@ async function handleGET(
               : ("not_started" as const),
           scheduledSendsAt:
             i === nextScheduledIdx ? scheduledSendsAt : null,
+          scheduledDraft: i === nextScheduledIdx ? scheduledDraft : null,
           invoice: null,
         };
       }
@@ -179,6 +183,7 @@ async function handleGET(
         ...slot,
         status,
         scheduledSendsAt: null,
+        scheduledDraft: null,
         invoice: {
           stripeInvoiceId: tx.stripe_invoice_id,
           amountDueCents: tx.amount_due_cents,
@@ -196,6 +201,13 @@ async function handleGET(
           // draft — gating client-side on UI "open" put a guaranteed-
           // 400 button on pre-finalization draft rows.
           canMarkPaid: tx.status === "open" || tx.status === "uncollectible",
+          // Same idea for Cancel: anything Stripe still holds unpaid.
+          // A draft row (left by a re-sync) qualifies too — the cancel
+          // route finalizes it silently and voids it in one step.
+          canCancel:
+            tx.status === "open" ||
+            tx.status === "uncollectible" ||
+            tx.status === "draft",
         },
       };
     });
@@ -269,6 +281,11 @@ export interface ScheduleSlot {
    *  future anchor, or the running cycle's period end). Null when
    *  Stripe couldn't say — the pill just renders without a date. */
   scheduledSendsAt: number | null;
+  /** For the "scheduled" slot only: the Stripe draft already prepared
+   *  for this month, when there is one. The row offers Cancel on it so
+   *  the invoice can be stopped before it is emailed. Null when the
+   *  month's invoice doesn't exist yet in any form. */
+  scheduledDraft: { invoiceId: string; amountDueCents: number } | null;
   invoice: {
     stripeInvoiceId: string;
     amountDueCents: number;
@@ -286,6 +303,11 @@ export interface ScheduleSlot {
      *  the folded UI status can't express (drafts render as "open"
      *  but can't be paid). */
     canMarkPaid: boolean;
+    /** Whether the cancel-invoice action can succeed on this invoice:
+     *  the raw mirror status is open, uncollectible or draft (Stripe
+     *  can void the first two and, after a silent finalize, the
+     *  third). Paid, refunded and already-void rows get no button. */
+    canCancel: boolean;
   } | null;
 }
 

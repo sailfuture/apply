@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Ban,
   Banknote,
   CheckCircle2,
   Circle,
@@ -31,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -52,6 +54,7 @@ import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { stripeInvoiceDashboardUrl } from "@/lib/stripe-dashboard";
 import { cn } from "@/lib/utils";
 import type {
   ScheduleResponse,
@@ -98,6 +101,9 @@ export default function FamilyBillingPage() {
   const [markPaidSlot, setMarkPaidSlot] = useState<ScheduleSlot | null>(
     null
   );
+  // "Cancel invoice" — the slot whose unpaid invoice (or not-yet-sent
+  // draft) is being voided, null when the dialog is closed.
+  const [cancelSlot, setCancelSlot] = useState<ScheduleSlot | null>(null);
 
   // "Re-sync from Stripe" — mirror backfill scoped to THIS family
   // only (familyId param), so the click takes seconds, not the
@@ -291,6 +297,7 @@ export default function FamilyBillingPage() {
       <ScheduleCard
         slots={data.slots}
         onMarkPaid={setMarkPaidSlot}
+        onCancel={setCancelSlot}
         onResync={resync}
         resyncing={resyncing}
       />
@@ -303,9 +310,39 @@ export default function FamilyBillingPage() {
           familyId={familyId}
           slot={markPaidSlot}
           onClose={() => setMarkPaidSlot(null)}
-          onRecorded={() => {
-            setMarkPaidSlot(null);
-            void mutate();
+          onRecorded={async () => {
+            // Reload, THEN close: the spinner holds until the refreshed
+            // schedule shows the month as Complete, and the dialog goes
+            // away once the reload has finished either way (the
+            // payment is already recorded in Stripe).
+            try {
+              await mutate();
+            } finally {
+              setMarkPaidSlot(null);
+            }
+          }}
+        />
+      ) : null}
+
+      {cancelSlot && yearId ? (
+        <CancelInvoiceDialog
+          key={
+            cancelSlot.invoice?.stripeInvoiceId ??
+            cancelSlot.scheduledDraft?.invoiceId ??
+            cancelSlot.slotIndex
+          }
+          familyId={familyId}
+          yearId={yearId}
+          slot={cancelSlot}
+          onClose={() => setCancelSlot(null)}
+          onCancelled={async () => {
+            // Same rule: reload, then close — the spinner runs until
+            // the row re-renders as Cancelled.
+            try {
+              await mutate();
+            } finally {
+              setCancelSlot(null);
+            }
           }}
         />
       ) : null}
@@ -400,6 +437,7 @@ function SummaryStat({
 function ScheduleCard({
   slots,
   onMarkPaid,
+  onCancel,
   onResync,
   resyncing,
 }: {
@@ -407,6 +445,9 @@ function ScheduleCard({
   /** "Mark paid" click on an open/failed row — opens the
    *  outside-payment dialog for that slot's invoice. */
   onMarkPaid: (slot: ScheduleSlot) => void;
+  /** "Cancel" click on an unpaid row or the Scheduled month's draft —
+   *  opens the void-invoice confirm dialog for that slot. */
+  onCancel: (slot: ScheduleSlot) => void;
   /** Year-wide mirror backfill from Stripe — corrects drift the
    *  webhook missed (historical Dashboard refunds especially). */
   onResync: () => void;
@@ -466,6 +507,7 @@ function ScheduleCard({
                 key={slot.slotIndex}
                 slot={slot}
                 onMarkPaid={onMarkPaid}
+                onCancel={onCancel}
               />
             ))}
           </TableBody>
@@ -484,9 +526,11 @@ const ACTION_BADGE =
 function ScheduleRow({
   slot,
   onMarkPaid,
+  onCancel,
 }: {
   slot: ScheduleSlot;
   onMarkPaid: (slot: ScheduleSlot) => void;
+  onCancel: (slot: ScheduleSlot) => void;
 }) {
   const inv = slot.invoice;
   // Server-computed from the RAW mirror status (open/uncollectible —
@@ -557,7 +601,33 @@ function ScheduleRow({
                 Mark paid
               </button>
             ) : null}
-            {inv.hostedInvoiceUrl ? (
+            {inv.canCancel ? (
+              // Void the invoice in Stripe — opens the confirm dialog.
+              // Server-gated like Mark paid (open/uncollectible/draft).
+              <button
+                type="button"
+                onClick={() => onCancel(slot)}
+                className={ACTION_BADGE}
+                title="Cancel this invoice — voids it in Stripe so the family isn't billed for this month"
+              >
+                <Ban className="size-3" aria-hidden="true" />
+                Cancel
+              </button>
+            ) : null}
+            {slot.status === "void" ? (
+              // /pay sends a cancelled invoice to the PARENT tuition
+              // page; admin wants Stripe's record of it instead.
+              <a
+                href={stripeInvoiceDashboardUrl(inv.stripeInvoiceId)}
+                target="_blank"
+                rel="noreferrer"
+                className={ACTION_BADGE}
+                title="Open the voided invoice in the Stripe Dashboard"
+              >
+                <ExternalLink className="size-3" aria-hidden="true" />
+                Stripe
+              </a>
+            ) : inv.hostedInvoiceUrl ? (
               // Stripe's unauthenticated pay-this-exact-invoice page —
               // anyone holding the link can view and pay it, so admin
               // can open it and enter a card on the family's behalf.
@@ -585,6 +655,19 @@ function ScheduleRow({
               </a>
             ) : null}
           </span>
+        ) : slot.scheduledDraft ? (
+          // Stripe has already prepared this month's invoice (it sends
+          // on the date in the Invoice Sent column). Cancelling now
+          // voids it before the family ever sees it.
+          <button
+            type="button"
+            onClick={() => onCancel(slot)}
+            className={ACTION_BADGE}
+            title="Cancel before it sends — Stripe has prepared this invoice but hasn't emailed it yet"
+          >
+            <Ban className="size-3" aria-hidden="true" />
+            Cancel
+          </button>
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
@@ -632,8 +715,10 @@ function StatusPill({
           Icon: XCircle,
         };
       case "void":
+        // Voided in Stripe — from the Cancel action here or the
+        // Dashboard. Nothing owed for the month; later months bill.
         return {
-          label: "Void",
+          label: "Cancelled",
           tone: "bg-muted text-muted-foreground ring-border",
           Icon: XCircle,
         };
@@ -697,7 +782,9 @@ function MarkPaidDialog({
   familyId: number;
   slot: ScheduleSlot;
   onClose: () => void;
-  onRecorded: () => void;
+  /** Runs after the route succeeds; the busy state holds until it
+   *  resolves so the spinner outlives the schedule refetch. */
+  onRecorded: () => void | Promise<unknown>;
 }) {
   const inv = slot.invoice;
   const [method, setMethod] = useState<PaymentMethodKey>("check");
@@ -728,12 +815,22 @@ function MarkPaidDialog({
       toast.success(
         `${slot.monthLabel} marked paid — ${body?.payment_method ?? "recorded"}.`
       );
-      onRecorded();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Couldn't record the payment"
       );
       setSaving(false);
+      return;
+    }
+    // Recorded. The host reloads the schedule and closes this dialog;
+    // the busy state holds until it has. A refetch hiccup must not
+    // read as a failed payment, so it gets its own message.
+    try {
+      await onRecorded();
+    } catch {
+      toast.error(
+        "Payment recorded, but the schedule didn't refresh — reload the page to see it."
+      );
     }
   }
 
@@ -808,6 +905,153 @@ function MarkPaidDialog({
               </>
             ) : (
               `Mark ${amountLabel} paid`
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Confirm dialog for cancelling an unpaid invoice. Posts to the
+ * cancel-invoice route, which voids the invoice in Stripe (silently
+ * finalizing a not-yet-sent draft first), marks every mirror row for it
+ * `void`, and writes a billing note carrying the reason. Nothing can
+ * undo a void, so the copy says so and the primary button names the
+ * amount. Caller keys this component by invoice so the reason resets.
+ */
+function CancelInvoiceDialog({
+  familyId,
+  yearId,
+  slot,
+  onClose,
+  onCancelled,
+}: {
+  familyId: number;
+  yearId: number;
+  slot: ScheduleSlot;
+  onClose: () => void;
+  /** Runs after the route succeeds; the busy state holds until it
+   *  resolves so the spinner outlives the schedule refetch. */
+  onCancelled: () => void | Promise<unknown>;
+}) {
+  // A mirrored invoice row, or the Scheduled month's not-yet-sent
+  // Stripe draft — the route treats both the same.
+  const invoiceId =
+    slot.invoice?.stripeInvoiceId ?? slot.scheduledDraft?.invoiceId ?? null;
+  const amountCents =
+    slot.invoice?.amountDueCents ??
+    slot.scheduledDraft?.amountDueCents ??
+    null;
+  const unsent = !slot.invoice && !!slot.scheduledDraft;
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const amountLabel =
+    amountCents != null ? formatUsd(amountCents / 100) : "this";
+
+  async function submit() {
+    if (!invoiceId || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/families/${familyId}/billing/cancel-invoice`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            invoiceId,
+            yearId,
+            reason: reason.trim() || undefined,
+          }),
+        }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.error ?? `Failed to cancel (${res.status})`);
+      }
+      toast.success(
+        body?.path === "already_void"
+          ? `${slot.monthLabel} invoice was already voided in Stripe — updated here.`
+          : `${slot.monthLabel} invoice cancelled.`
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't cancel the invoice"
+      );
+      setSaving(false);
+      return;
+    }
+    // Cancelled. The host reloads the schedule and closes this dialog;
+    // the busy state holds until it has. A refetch hiccup must not
+    // read as a failed cancel, so it gets its own message.
+    try {
+      await onCancelled();
+    } catch {
+      toast.error(
+        "Invoice cancelled, but the schedule didn't refresh — reload the page to see it."
+      );
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !saving && !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Cancel the {slot.monthLabel} invoice?</DialogTitle>
+          <DialogDescription>
+            {unsent
+              ? `Stripe has prepared this ${amountLabel} invoice but hasn't emailed it yet. Cancelling voids it now without sending anything to the family.`
+              : `Voids the ${amountLabel} invoice in Stripe. The family won't be charged for ${slot.monthLabel}, reminders and autopay stop for it, and the month shows as Cancelled on their tuition page.`}{" "}
+            Later months keep billing as scheduled. This can&rsquo;t be
+            undone.
+          </DialogDescription>
+        </DialogHeader>
+        <div>
+          <label
+            htmlFor="cancel-invoice-reason"
+            className="block text-xs font-medium text-muted-foreground mb-1.5"
+          >
+            Reason (optional)
+          </label>
+          <Textarea
+            id="cancel-invoice-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Family withdrew mid-month; tuition waived for this month"
+            disabled={saving}
+            rows={3}
+            maxLength={500}
+            className="bg-white"
+          />
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Saved to the family&rsquo;s activity log and on the invoice in
+            Stripe.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-white"
+            disabled={saving}
+            onClick={onClose}
+          >
+            Keep invoice
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={saving || !invoiceId}
+            onClick={submit}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+                Cancelling…
+              </>
+            ) : (
+              `Cancel ${amountLabel} invoice`
             )}
           </Button>
         </DialogFooter>

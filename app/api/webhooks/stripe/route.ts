@@ -61,7 +61,12 @@ import { buildFamilyByParentEmail } from "@/lib/store-server";
  *     means the family silently stops being billed.
  *   - `invoice.finalized` / `invoice.paid` / `invoice.payment_failed`
  *     / `invoice.voided` / `invoice.marked_uncollectible` — mirror
- *     upsert. `payment_failed` also alerts staff.
+ *     upsert. `payment_failed` also alerts staff. `invoice.voided`
+ *     is how a Dashboard void (or the in-app cancel's own void)
+ *     reaches the mirror — the endpoint must be subscribed to it.
+ *   - `invoice.deleted` — a Dashboard-deleted draft: flip any
+ *     mirrored rows for it to `void`. Safety net only; Stripe won't
+ *     delete subscription drafts (they get voided instead).
  *   - `charge.refunded` — reflect Dashboard (or in-app) refunds in
  *     the mirror: Stripe keeps the invoice `paid` after a refund, so
  *     this is the only signal. Fully refunded → status `refunded`;
@@ -104,6 +109,9 @@ export async function POST(req: NextRequest) {
       case "invoice.voided":
       case "invoice.marked_uncollectible":
         await upsertInvoiceFromEvent(event.type, event.data.object);
+        break;
+      case "invoice.deleted":
+        await handleInvoiceDeleted(event.data.object);
         break;
       case "charge.refunded":
         await handleChargeRefunded(event.data.object);
@@ -709,6 +717,32 @@ async function findFamilyPaymentBySubscriptionId(
     }
   }
   return null;
+}
+
+/**
+ * A draft deleted in the Stripe Dashboard. Stripe only lets ONE-OFF
+ * drafts be deleted — a subscription draft has to be voided (the
+ * in-app cancel finalizes it silently and voids it; see
+ * `cancelInvoice` in lib/stripe.ts) — so for tuition this is a safety
+ * net: a draft row left by a re-sync whose invoice then disappears
+ * would otherwise sit as "Pending" forever. Rows are updated, never
+ * created: an invoice the mirror never saw is nothing to the
+ * schedule. Every row for the id is written (duplicates included).
+ * Strict lookup: a transient failure throws → Stripe retries.
+ */
+async function handleInvoiceDeleted(invoice: Stripe.Invoice): Promise<void> {
+  if (!invoice.id) return;
+  const rows = await xano.paymentTransactions.findAllByStripeIdStrict(
+    invoice.id
+  );
+  if (rows.length === 0) return;
+  const now = Date.now();
+  for (const row of rows) {
+    await xano.paymentTransactions.update(row.id, {
+      status: "void",
+      last_synced_at: now,
+    });
+  }
 }
 
 /* ─────────────────────── School-store orders ─────────────────────── */

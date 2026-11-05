@@ -1249,7 +1249,10 @@ function BillingScheduleRow({ slot }: { slot: ParentScheduleSlot }) {
         <ScheduleStatusPill status={slot.status} />
       </TableCell>
       <TableCell className="text-right">
-        {inv?.hostedInvoiceUrl ? (
+        {slot.status === "void" ? (
+          // Cancelled: nothing to pay, and the PDF would only say VOID.
+          <span className="text-muted-foreground">—</span>
+        ) : inv?.hostedInvoiceUrl ? (
           <a
             // Through /pay, which fetches a fresh URL from Stripe: the
             // stored one expires 30 days after the due date.
@@ -1307,8 +1310,10 @@ function ScheduleStatusPill({ status }: { status: ParentScheduleSlot["status"] }
           Icon: XCircle,
         };
       case "void":
+        // Cancelled by the school (voided in Stripe): nothing is owed
+        // for the month and the following months bill as usual.
         return {
-          label: "Void",
+          label: "Cancelled",
           tone: "bg-muted text-muted-foreground ring-border",
           Icon: XCircle,
         };

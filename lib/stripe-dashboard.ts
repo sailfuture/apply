@@ -23,3 +23,10 @@ export const STRIPE_INVOICES_DASHBOARD_URL = `${baseUrl}/invoices`;
 export function stripeCustomerDashboardUrl(customerId: string): string {
   return `${baseUrl}/customers/${customerId}`;
 }
+
+/** Invoice-scoped Dashboard URL — the invoice's detail page (status,
+ *  payments, and the cancel stamp in its metadata). Used where the
+ *  hosted pay page is the wrong destination, e.g. a cancelled invoice. */
+export function stripeInvoiceDashboardUrl(invoiceId: string): string {
+  return `${baseUrl}/invoices/${invoiceId}`;
+}

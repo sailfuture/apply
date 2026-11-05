@@ -49,9 +49,20 @@ export async function GET(
     // The mirror row is also the guard: only invoices Apply billed
     // are looked up in Stripe.
     const row = await xano.paymentTransactions.findByStripeId(invoiceId);
-    if (row) {
+    // A cancelled invoice has nothing to pay. Its Stripe page would
+    // only say "voided"; the tuition page shows the month as Cancelled
+    // in context, so an old text or email link lands there instead.
+    // Checked on the mirror first (no Stripe call) and again on the
+    // live invoice, for a Dashboard void the webhook hasn't mirrored.
+    if (row && row.status !== "void") {
       try {
         const invoice = await getStripeClient().invoices.retrieve(invoiceId);
+        if (invoice.status === "void") {
+          return NextResponse.redirect(
+            new URL("/dashboard/tuition", req.url),
+            302
+          );
+        }
         if (invoice.hosted_invoice_url) {
           return NextResponse.redirect(invoice.hosted_invoice_url, 302);
         }

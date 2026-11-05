@@ -299,6 +299,12 @@ export interface BillingSnapshot {
 export interface NextInvoiceTiming {
   sendsAtMs: number;
   source: "draft" | "trial" | "anchor" | "cycle";
+  /** The prepared-but-unsent invoice behind a "draft" source, so the
+   *  admin schedule can offer Cancel on it before it goes out. Null
+   *  for the other sources: no invoice object exists yet, so there is
+   *  nothing to cancel (stopping future months is a subscription
+   *  cancel). */
+  draft: { invoiceId: string; amountDueCents: number } | null;
 }
 
 export async function getNextInvoiceTiming(
@@ -313,25 +319,157 @@ export async function getNextInvoiceTiming(
     return {
       sendsAtMs: latest.automatically_finalizes_at * 1000,
       source: "draft",
+      draft: latest.id
+        ? { invoiceId: latest.id, amountDueCents: latest.amount_due ?? 0 }
+        : null,
     };
   }
   const nowUnix = Math.floor(Date.now() / 1000);
   if (subscription.status === "trialing" && subscription.trial_end) {
-    return { sendsAtMs: subscription.trial_end * 1000, source: "trial" };
+    return {
+      sendsAtMs: subscription.trial_end * 1000,
+      source: "trial",
+      draft: null,
+    };
   }
   if (subscription.billing_cycle_anchor > nowUnix) {
     return {
       sendsAtMs: subscription.billing_cycle_anchor * 1000,
       source: "anchor",
+      draft: null,
     };
   }
   // Billing periods live on the items (flexible billing mode has no
   // subscription-level current_period_end).
   const cycleEnd = subscription.items.data[0]?.current_period_end;
   if (cycleEnd && cycleEnd > nowUnix) {
-    return { sendsAtMs: cycleEnd * 1000, source: "cycle" };
+    return { sendsAtMs: cycleEnd * 1000, source: "cycle", draft: null };
   }
   return null;
+}
+
+/* ─────────────────────── Invoice cancellation ─────────────────────── */
+
+export type CancelInvoicePath = "voided" | "finalized_then_voided" | "already_void";
+
+/** Why `cancelInvoice` refused. `paid` and `missing` are the caller's
+ *  to explain (400/404); anything else surfaced as Stripe's message. */
+export class InvoiceCancelError extends Error {
+  readonly code: "paid" | "missing" | "state";
+  constructor(message: string, code: "paid" | "missing" | "state") {
+    super(message);
+    this.name = "InvoiceCancelError";
+    this.code = code;
+  }
+}
+
+/**
+ * Cancel one tuition invoice in Stripe.
+ *
+ * Stripe has no single "cancel" call; the right one depends on the
+ * invoice's state. `before` is the LIVE invoice — the caller reads it
+ * with `retrieveInvoiceOrNull` so ownership is checked before anything
+ * changes (the mirror can lag the Dashboard by a webhook) — and this
+ * branches on it:
+ *   - `open` / `uncollectible` → void. The invoice closes as a
+ *     zero-value paper trail (its hosted page says "voided"), Stripe's
+ *     reminders and autopay retries stop, and the subscription keeps
+ *     running: the family is simply not billed for this period and the
+ *     next cycle invoices normally.
+ *   - `draft` → finalize with `auto_advance: false`, THEN void. A
+ *     subscription draft can be neither deleted (Stripe only deletes
+ *     one-off drafts) nor voided (void needs a finalized invoice), so
+ *     this is the only route. With automatic advancement off the
+ *     finalization sends no invoice email, so the family never sees it.
+ *   - `void` → already cancelled (a retry, or a Dashboard void the
+ *     webhook hasn't mirrored yet). Reported as success so the caller
+ *     can bring the mirror up to date.
+ *   - `paid` → refused. Money already moved; that's a Dashboard refund.
+ *
+ * `stamp` is written to the invoice's metadata before the state
+ * change (best-effort) so the Dashboard shows who cancelled it and why.
+ *
+ * Returns the invoice as it was BEFORE the cancel as well as after:
+ * void keeps the period but may zero the amounts, and the mirror row
+ * should still show what the month would have cost.
+ */
+export async function cancelInvoice(
+  before: Stripe.Invoice,
+  stamp: Record<string, string>
+): Promise<{
+  before: Stripe.Invoice;
+  after: Stripe.Invoice;
+  path: CancelInvoicePath;
+}> {
+  const stripe = getStripeClient();
+  const invoiceId = before.id;
+  if (!invoiceId) {
+    throw new InvoiceCancelError("Invoice has no id", "missing");
+  }
+
+  switch (before.status) {
+    case "void":
+      return { before, after: before, path: "already_void" };
+    case "paid":
+      throw new InvoiceCancelError(
+        "This invoice has already been paid in Stripe. A paid invoice is refunded from the Stripe Dashboard, not cancelled — re-sync from Stripe to update this page.",
+        "paid"
+      );
+    case "draft": {
+      await stampInvoiceMetadata(stripe, invoiceId, stamp);
+      await stripe.invoices.finalizeInvoice(invoiceId, {
+        auto_advance: false,
+      });
+      const after = await stripe.invoices.voidInvoice(invoiceId);
+      return { before, after, path: "finalized_then_voided" };
+    }
+    case "open":
+    case "uncollectible": {
+      await stampInvoiceMetadata(stripe, invoiceId, stamp);
+      const after = await stripe.invoices.voidInvoice(invoiceId);
+      return { before, after, path: "voided" };
+    }
+    default:
+      throw new InvoiceCancelError(
+        `Invoice is ${before.status ?? "in an unknown state"} in Stripe and can't be cancelled.`,
+        "state"
+      );
+  }
+}
+
+/** The live invoice, or null when Stripe has no such invoice (deleted
+ *  in the Dashboard, or an id that was never Stripe's). Other failures
+ *  throw. Callers that must check ownership before acting read the
+ *  invoice here, then hand it to `cancelInvoice`. */
+export async function retrieveInvoiceOrNull(
+  invoiceId: string
+): Promise<Stripe.Invoice | null> {
+  try {
+    return await getStripeClient().invoices.retrieve(invoiceId);
+  } catch (err) {
+    const code = (err as { code?: string; statusCode?: number }) ?? {};
+    if (code.code === "resource_missing" || code.statusCode === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/** Dashboard paper trail for a cancel — best-effort, never blocks the
+ *  state change (metadata is editable on drafts and open invoices). */
+async function stampInvoiceMetadata(
+  stripe: Stripe,
+  invoiceId: string,
+  stamp: Record<string, string>
+): Promise<void> {
+  try {
+    await stripe.invoices.update(invoiceId, { metadata: stamp });
+  } catch (err) {
+    console.error(
+      `[stripe] couldn't stamp cancel metadata on ${invoiceId}:`,
+      err
+    );
+  }
 }
 
 /**

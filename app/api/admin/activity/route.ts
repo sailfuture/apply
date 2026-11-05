@@ -566,9 +566,12 @@ export async function GET(req: NextRequest) {
           ts: t.last_synced_at,
           kind: "system",
           scope: "billing",
+          // "Cancelled" matches the schedule pills; the admin's own
+          // note (who, why) sits beside this marker when the cancel
+          // came from Apply rather than the Stripe Dashboard.
           title:
             t.status === "void"
-              ? `Invoice voided — ${dollars}`
+              ? `Invoice cancelled — ${dollars}`
               : `Invoice written off — ${dollars}`,
           body: "",
           author: "",
