@@ -211,16 +211,20 @@ export default function AdminStorePage() {
                 : "No purchases yet — orders appear here automatically as parents check out."}
             </p>
           ) : (
-            <Table className="text-sm">
+            // Fixed layout so long names/items truncate (full text in the
+            // tooltip) instead of forcing a horizontal scroll.
+            <Table className="table-fixed text-sm">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-4">Date</TableHead>
-                  <TableHead>Family</TableHead>
-                  <TableHead>Student</TableHead>
+                  <TableHead className="w-28 pl-4">Date</TableHead>
+                  <TableHead className="w-[18%]">Family</TableHead>
+                  <TableHead className="w-[17%]">Student</TableHead>
                   <TableHead>Item</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="pr-4 text-right">Distribution</TableHead>
+                  <TableHead className="w-14">Size</TableHead>
+                  <TableHead className="w-20 text-right">Amount</TableHead>
+                  <TableHead className="w-48 pr-4 text-right">
+                    Distribution
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -310,27 +314,32 @@ function OrderRow({
       >
         {relTime(Number(order.paid_at) || 0)}
       </TableCell>
-      <TableCell>
+      <TableCell className="truncate">
         {/* Click to reassign — attribution is automatic (portal
             reference / purchaser email) but not infallible. */}
         <button
           type="button"
           onClick={onReassign}
-          title={`Change family assignment${order.purchaser_email ? ` · purchased by ${order.purchaser_email}` : ""}`}
-          className="group inline-flex items-center gap-1.5 text-left"
+          title={`${order.family_name} · Change family assignment${order.purchaser_email ? ` · purchased by ${order.purchaser_email}` : ""}`}
+          className="group inline-flex max-w-full items-center gap-1.5 text-left"
         >
-          <span className="font-medium underline-offset-2 group-hover:underline">
+          <span className="min-w-0 truncate font-medium underline-offset-2 group-hover:underline">
             {order.family_name}
           </span>
-          <Pencil className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+          <Pencil className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
         </button>
       </TableCell>
-      <TableCell className="whitespace-nowrap">
+      <TableCell
+        className="truncate"
+        title={(order.student_name ?? "").trim() || undefined}
+      >
         {(order.student_name ?? "").trim() || (
           <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
-      <TableCell>{order.item}</TableCell>
+      <TableCell className="truncate" title={order.item}>
+        {order.item}
+      </TableCell>
       <TableCell className="whitespace-nowrap">
         {(order.size ?? "").trim() ? (
           <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold uppercase">
