@@ -13,15 +13,16 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const { isLoaded } = useAuth();
-  // The entire `/dashboard/**` tree, the application + registration flows,
-  // and the root home all render on a clean shell — no app sidebar, no
-  // application-step nav. The dashboard pages have their own self-contained
-  // layout (header + cards) and shouldn't inherit the application chrome.
+  // The entire `/dashboard/**` tree and the application + registration
+  // flows render on a clean shell — no app sidebar, no application-step
+  // nav. The dashboard pages have their own self-contained layout (header
+  // + cards) and shouldn't inherit the application chrome. The root `/`
+  // resolver renders the same clean shell but lives in its own `(root)`
+  // group outside this layout (see the note in `app/(root)/page.tsx`).
   // Re-applications share the `/apply/year/:id` URL space with new applicants
   // (the `type` field on the progress row drives flow-specific behavior),
   // so there's no separate `/reapply` matcher here anymore.
   const isApplicationFlow =
-    pathname === "/" ||
     pathname.startsWith("/dashboard") ||
     /^\/apply\/year\/\d+/.test(pathname) ||
     /^\/registration\/year\/\d+/.test(pathname);

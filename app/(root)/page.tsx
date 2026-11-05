@@ -19,6 +19,18 @@ import {
  * destination pages then re-redirected client-side once their data
  * resolved.
  *
+ * This page lives in its own `(root)` route group on purpose: no
+ * `loading.tsx` sits between it and the root layout. A `loading.tsx`
+ * is a Suspense boundary, and a `redirect()` thrown inside one never
+ * reaches the browser as an HTTP 307 — Next flushes the shell (the
+ * loading spinner) first and serializes the redirect into the RSC
+ * stream, which the client replays as `router.replace` (or, on a
+ * document load, as a 1-second `<meta http-equiv="refresh">` plus a
+ * hard navigation). With no boundary above it the redirect fails the
+ * shell and Next answers with a real 307 + `Location`, so sign-in
+ * lands on the destination in one hop. Keep this group free of
+ * `loading.tsx`.
+ *
  * Resolution order (first match wins):
  *   1. Not signed in            → /sign-in
  *   2. Email matches admin list → /admin

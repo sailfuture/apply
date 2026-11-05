@@ -8,8 +8,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * Default sequence used by every parent-flow loading boundary
- * (root, dashboard segment, layout hydration gates, page-level SWR
- * spinners). Sized to span ~7 seconds before settling on "Almost
+ * (sign-in / onboarding / dashboard segments, layout hydration gates,
+ * page-level SWR spinners). Sized to span ~7 seconds before settling on "Almost
  * there..." so realistic post-sign-in waits stay reassured the whole
  * way through.
  */
