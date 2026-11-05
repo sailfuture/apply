@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { syncFamilyNameWithStudents } from "@/lib/family-name-sync";
 
 export async function PATCH(
   req: NextRequest,
@@ -27,6 +28,12 @@ export async function PATCH(
     // route's same bump.
     const patch = { ...body, last_edited_time: Date.now() };
     const updated = await xano.students.update(studentId, patch);
+    // The family name lists first names; keep it current on a rename.
+    if (typeof body?.first_name === "string") {
+      await syncFamilyNameWithStudents(
+        Number(updated.registration_families_id)
+      );
+    }
     return NextResponse.json(updated);
   } catch (err) {
     console.error("Failed to update student:", err);

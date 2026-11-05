@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR, { useSWRConfig } from "swr";
-import { Bell, Loader2, Mail } from "lucide-react";
+import { Bell, Loader2, Mail, MessageSquare, Phone } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetcher } from "@/hooks/use-api";
 import { formatUSPhone } from "@/lib/phone";
+import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 import { cn } from "@/lib/utils";
 import type {
   ParentNotificationEntry,
@@ -179,6 +180,36 @@ export default function NotificationsPage() {
         subtitle="Every email and text message from the school, plus your replies — one running conversation."
       />
 
+      {/* How to reach the school, pinned above the feed so a parent
+          who came here to get hold of someone finds the number first.
+          The Main Line is the office phone; the texting number (when
+          the family has one on file) lands replies in this thread. */}
+      <div className="flex flex-col gap-2 rounded-xl border bg-white px-4 py-3 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6">
+        <a
+          href={`tel:${MAIN_LINE}`}
+          className="inline-flex items-center gap-2 font-medium hover:text-primary"
+        >
+          <Phone className="size-4 text-muted-foreground" aria-hidden="true" />
+          Call the school: {MAIN_LINE_DISPLAY}
+        </a>
+        {smsNumber ? (
+          <a
+            href={`sms:${smsNumber}`}
+            className="inline-flex items-center gap-2 text-muted-foreground hover:text-primary"
+          >
+            <MessageSquare className="size-4" aria-hidden="true" />
+            Text {formatUSPhone(smsNumber)} (replies land in this thread)
+          </a>
+        ) : null}
+        <a
+          href="mailto:dean@sailfuture.org"
+          className="inline-flex items-center gap-2 text-muted-foreground hover:text-primary"
+        >
+          <Mail className="size-4" aria-hidden="true" />
+          dean@sailfuture.org
+        </a>
+      </div>
+
       {loading ? (
         <div className="space-y-3">
           <Skeleton className="h-7 w-64 rounded-full" />
@@ -250,30 +281,6 @@ export default function NotificationsPage() {
         />
       ) : null}
 
-      <p className="text-xs text-muted-foreground text-center pt-4 border-t">
-        Need to reach us?{" "}
-        {smsNumber ? (
-          <>
-            Text us at{" "}
-            <a
-              href={`sms:${smsNumber}`}
-              className="text-primary underline underline-offset-2"
-            >
-              {formatUSPhone(smsNumber)}
-            </a>{" "}
-            (replies come straight to this thread), or email{" "}
-          </>
-        ) : (
-          <>Text this thread back from your phone, or email{" "}</>
-        )}
-        <a
-          href="mailto:dean@sailfuture.org"
-          className="text-primary underline underline-offset-2"
-        >
-          dean@sailfuture.org
-        </a>
-        .
-      </p>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { syncFamilyNameWithStudents } from "@/lib/family-name-sync";
 import { sendEmail } from "@/lib/emails/send";
 import { residentialStudentAdded } from "@/lib/emails/templates";
 import { parseResidentialHouse } from "@/lib/residential";
@@ -165,6 +166,8 @@ export async function POST(req: NextRequest) {
       registration_students_id: [...existingStudentIds, student.id],
     });
   }
+  // The family name carries the roster: "Adams Family (Jorden, Matthew)".
+  await syncFamilyNameWithStudents(familyId);
 
   // 2. Open the marked application for the year. Mirrors the standard
   //    `/api/applications` POST shape, plus the residential marker and a

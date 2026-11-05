@@ -1,7 +1,6 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { xano, ensureParentRecord } from "@/lib/xano";
-import { xanoFetch } from "@/lib/xano-fetch";
 import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
 import { getAdminForEmail } from "@/lib/admin-auth";
 import {
@@ -11,13 +10,18 @@ import {
 } from "@/lib/family-auth";
 
 /**
- * Root landing page. Single decision-and-redirect — collapses what
- * used to be a multi-hop chain (`/` → `/apply/year/X` → `/registration/year/X`
- * → `/dashboard`) into one server-side hop straight to the final
- * destination. The previous chain caused visible white-frame flashes
- * between hops because each hop was a full browser navigation; the
- * destination pages then re-redirected client-side once their data
- * resolved.
+ * Root landing page. Single decision-and-redirect: one `redirect()`
+ * straight to the lifecycle destination, so the destination pages'
+ * own stage detection has nothing left to correct.
+ *
+ * How that redirect reaches the browser: `app/loading.tsx` wraps this
+ * page in a Suspense boundary, so Next streams the shell (spinner)
+ * first and delivers the redirect inside the stream. The client
+ * router replays it as a `replace` when the parent arrived by client
+ * navigation (Clerk's post-sign-in push), and a meta refresh forces a
+ * full navigation on a document load. It is NOT an HTTP 307; moving
+ * this resolver out from under the loading boundaries would make it
+ * one.
  *
  * Resolution order (first match wins):
  *   1. Not signed in            → /sign-in
@@ -158,7 +162,7 @@ export default async function Page() {
   // Step 4 — fan out the lifecycle queries in parallel. We need all
   // four to compute the final destination without bouncing through
   // intermediate URLs.
-  const packetsUrl = `${process.env.XANO_API_BASE_URL}/registration_student_registration?registration_school_years_id=${targetYearId}&registration_families_id=${familyId}`;
+  const yearId = targetYearId;
   // `family` itself no longer carries `isAccepted` / `isSubmitted` —
   // those moved to the per-year `family_application_progress` row,
   // which we already fetch below as `appProgress`. We still pull the
@@ -179,26 +183,34 @@ export default async function Page() {
     xano.studentRegistrationProgress
       .getByFamilyAndYear(familyId, targetYearId)
       .catch(() => null),
-    xanoFetch(packetsUrl, { cache: "no-store" }, { fresh: true })
-      .then(async (res) => {
-        type Packet = {
+    // Packets join to the family THROUGH the student — the packets
+    // table has no `registration_families_id` column. This read used
+    // to filter on that column, so it matched nothing, no family ever
+    // resolved as enrolled here, and every enrolled sign-in bounced
+    // through /registration before the client sent it on to
+    // /dashboard. Same lookup as `/api/student-registration?yearId=`,
+    // so this verdict and the client's can't disagree.
+    xano.students
+      .getByFamilyId(familyId)
+      .then((students) =>
+        Promise.all(
+          students.map((s) =>
+            xano.studentRegistration.getByStudentAndYear(s.id, yearId)
+          )
+        )
+      )
+      .then((rows) =>
+        rows.filter((p): p is NonNullable<typeof p> => p !== null)
+      )
+      .catch((err) => {
+        // Degrades to "not enrolled" → /registration, whose own stage
+        // detection corrects the landing once the API reads succeed.
+        console.error(`[/] packet lookup failed for family ${familyId}:`, err);
+        return [] as {
           registrationConfirmed?: boolean;
           registration_students_id?: number;
-        };
-        if (!res.ok) return [] as Packet[];
-        const items = await res.json();
-        return (Array.isArray(items) ? items : []).filter(
-          (p: { registration_families_id?: number }) =>
-            Number(p.registration_families_id) === familyId
-        ) as Packet[];
-      })
-      .catch(
-        () =>
-          [] as {
-            registrationConfirmed?: boolean;
-            registration_students_id?: number;
-          }[]
-      ),
+        }[];
+      }),
   ]);
 
   // Step 5 — derive lifecycle state and pick the final URL. `isAccepted`

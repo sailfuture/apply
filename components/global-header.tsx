@@ -1,18 +1,82 @@
 "use client";
 
+import { Suspense } from "react";
 import Image from "next/image";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
-import { useFamily, useSchoolYears } from "@/hooks/use-api";
+import { useFamily, useSchoolYears, useStudents } from "@/hooks/use-api";
+import { familyNameWithStudents } from "@/lib/family-name";
 
 const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
+
+interface SchoolYear {
+  id: number;
+  year_name: string;
+  isNextYear?: boolean;
+  isActive?: boolean;
+}
+
+/**
+ * The dashboard's year lives in `?yearId`, so this is the one place the
+ * header reads search params. It sits under its own Suspense boundary:
+ * on statically prerendered routes `useSearchParams` bails its subtree
+ * out to client rendering, and keeping that subtree to this span means
+ * the rest of the header still ships in the HTML. (A boundary around
+ * the whole header flashed an empty bar on first paint; reading the
+ * param at click time, the previous workaround, meant the dashboard
+ * never showed its year at all, so the year appeared on the
+ * registration pages and vanished on the dashboard during sign-in.)
+ */
+function DashboardYear({
+  years,
+  hasFamilyName,
+}: {
+  years: SchoolYear[] | undefined;
+  hasFamilyName: boolean;
+}) {
+  const searchParams = useSearchParams();
+  const yearId = Number(searchParams.get("yearId"));
+  const year = yearId && years ? years.find((y) => y.id === yearId) : undefined;
+  if (!year) return null;
+  return (
+    <>
+      {hasFamilyName ? (
+        <span className="mx-1.5" aria-hidden="true">&bull;</span>
+      ) : null}
+      {year.year_name}
+    </>
+  );
+}
 
 export function GlobalHeader() {
   const router = useRouter();
   const pathname = usePathname();
-  const { data: familyData } = useFamily();
-  const { data: yearsData } = useSchoolYears();
-  const familyName = familyData?.family_name ?? null;
+
+  // No session exists on the auth pages, so the data hooks stay idle
+  // there: each call would 401, wait on clerk-js, retry and 401 again,
+  // and the key was then read as settled on the first page after
+  // sign-in.
+  const isAuthPage =
+    pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
+  const { data: familyData } = useFamily({ enabled: !isAuthPage });
+  const { data: yearsData } = useSchoolYears({ enabled: !isAuthPage });
+  const { data: studentsData } = useStudents({ enabled: !isAuthPage });
+
+  // "Adams Family (Jorden, Matthew)": the stored name's roster suffix
+  // is recomposed from the live student list so a student added,
+  // archived or renamed shows up without waiting for the stored name
+  // to catch up. Until the students arrive, the stored name stands.
+  const storedFamilyName: string | null = familyData?.family_name ?? null;
+  const students = studentsData as
+    | { first_name?: string; isArchived?: boolean }[]
+    | undefined;
+  const familyName =
+    storedFamilyName && students
+      ? familyNameWithStudents(
+          storedFamilyName,
+          students.filter((s) => !s.isArchived).map((s) => s.first_name)
+        ) || storedFamilyName
+      : storedFamilyName;
 
   // The dashboard is the post-enrollment surface — no application or
   // registration chrome should appear there. Strip the "Student Application
@@ -24,6 +88,10 @@ export function GlobalHeader() {
   // so we don't gate on a `/reapply/*` matcher anymore — both render as
   // "Student Application" since the flow is unified.
   const isWelcome = pathname.startsWith("/welcome");
+  // `/` is the resolver that decides where the parent belongs, so the
+  // header can't know yet; the school name alone keeps the title from
+  // reading "Student Application" and then snapping to the real one.
+  const isNeutral = isWelcome || isAuthPage || pathname === "/";
 
   // Detect URL-driven registration vs application chrome. With the
   // family-level `isAccepted` flag gone (it moved to the per-year
@@ -40,16 +108,15 @@ export function GlobalHeader() {
   const isRegistrationFlow = isAccepted || REGISTRATION_SEGMENTS.has(segment);
 
   // Get school year name
-  const schoolYear = yearId && yearsData
-    ? (yearsData as { id: number; year_name: string }[]).find((y) => y.id === yearId)
-    : null;
+  const years = yearsData as SchoolYear[] | undefined;
+  const schoolYear = yearId && years ? years.find((y) => y.id === yearId) : null;
   const yearName = schoolYear?.year_name ?? null;
 
   const title = isDashboard
     ? "SailFuture Academy Parent Dashboard"
     : isRegistrationFlow
       ? "SailFuture Academy Student Registration"
-      : isWelcome
+      : isNeutral
         ? "SailFuture Academy"
         : "SailFuture Academy Student Application";
 
@@ -60,15 +127,11 @@ export function GlobalHeader() {
   // they shouldn't see. This covers every flow EXCEPT the dashboard,
   // whose `?yearId` is read at click time in `handleLogoClick` below.
   const homeHref = (() => {
-    const years =
-      (yearsData as
-        | { id: number; isNextYear?: boolean; isActive?: boolean }[]
-        | undefined) ?? [];
     // Stay on the year in the URL — a family can be applying for the
     // current year, not just the upcoming one.
     const targetId =
       yearId ??
-      (years.find((y) => y.isNextYear) ?? years.find((y) => y.isActive))?.id;
+      ((years ?? []).find((y) => y.isNextYear) ?? (years ?? []).find((y) => y.isActive))?.id;
     if (!targetId) return "/";
     return isAccepted
       ? `/registration/year/${targetId}`
@@ -77,11 +140,8 @@ export function GlobalHeader() {
 
   // On the parent dashboard the logo stays on the dashboard for whichever
   // year is in view, preserving `?yearId` so the year picker doesn't
-  // reset. We read that param from the live URL at click time rather than
-  // via `useSearchParams` at render — that hook would force the entire
-  // header under a Suspense boundary (CSR-bailout rule for prerendered
-  // routes), which flashed an empty header bar on first paint. Reading at
-  // click time also always reflects the current picker selection.
+  // reset. Read from the live URL at click time so it always reflects
+  // the current picker selection.
   const handleLogoClick = () => {
     if (isDashboard) {
       const yearParam =
@@ -134,11 +194,21 @@ export function GlobalHeader() {
             <span className="text-sm font-semibold tracking-tight sm:text-base leading-tight">
               {title}
             </span>
-            {(familyName || yearName) && (
-              <span className="text-xs text-muted-foreground leading-tight">
-                {familyName}{familyName && yearName && <span className="mx-1.5" aria-hidden="true">&bull;</span>}{yearName}
-              </span>
-            )}
+            {/* The subtitle line keeps its height from the first paint
+                (`min-h-4` = one line of text-xs), so the family name and
+                year arriving a moment later never push the title up. */}
+            <span className="min-h-4 text-xs text-muted-foreground leading-tight">
+              {familyName}
+              {familyName && yearName ? (
+                <span className="mx-1.5" aria-hidden="true">&bull;</span>
+              ) : null}
+              {yearName}
+              {isDashboard ? (
+                <Suspense fallback={null}>
+                  <DashboardYear years={years} hasFamilyName={!!familyName} />
+                </Suspense>
+              ) : null}
+            </span>
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { syncFamilyNameWithStudents } from "@/lib/family-name-sync";
 import { cancelFamilyEventSignups } from "@/lib/event-signups";
 import type { XanoStudent } from "@/lib/xano";
 import { removeStripeItemsForArchivedStudent } from "@/lib/per-student-billing";
@@ -320,6 +321,16 @@ export async function PATCH(
     const updated = touchesAdminGroupFields
       ? await xano.students.updateOnAdminGroup(id, patch)
       : await xano.students.update(id, patch);
+
+    // The family name lists the non-archived roster's first names,
+    // so an archive, unarchive or rename changes it. Off the response
+    // path; `after()` keeps the invocation alive until it lands.
+    if ("isArchived" in patch || "first_name" in patch) {
+      const familyIdForName = Number(updated?.registration_families_id);
+      if (Number.isFinite(familyIdForName) && familyIdForName > 0) {
+        after(() => syncFamilyNameWithStudents(familyIdForName));
+      }
+    }
 
     // On `isArchived` false → true: pull every active Stripe
     // SubscriptionItem the student is on. Walks every packet for

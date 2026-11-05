@@ -3,7 +3,7 @@
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
-import { useStudents } from "@/hooks/use-api";
+import { mutateFamily, useStudents } from "@/hooks/use-api";
 import useSWR, { useSWRConfig } from "swr";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
@@ -591,15 +591,20 @@ export default function YearOverviewPage() {
     isRegistrationSubmitted &&
     allStudentsConfirmed;
 
-  // A settled `null` family means this signed-in user has no family row
-  // at all (never finished onboarding, or their Clerk metadata points
-  // nowhere). Nothing on this page can render for them — send them to
-  // /welcome to create one instead of holding the spinner forever.
+  // A settled `null` family usually means this signed-in user has no
+  // family row at all (never finished onboarding) and belongs on
+  // /welcome; that bounce lives in the routing effect below so it can
+  // never race the lifecycle redirect. But `/api/families` can also
+  // answer null before this session existed (the header fetched it on
+  // /sign-in), and `useFamily` never revalidates on its own. Progress
+  // rows prove the family exists, so refetch the family once instead.
+  const familyRepairedRef = useRef(false);
   useEffect(() => {
-    if (!loading && family === null) {
-      router.replace("/welcome");
-    }
-  }, [loading, family, router]);
+    if (family !== null || familyRepairedRef.current) return;
+    if (!progress && !regProgress) return;
+    familyRepairedRef.current = true;
+    void mutateFamily();
+  }, [family, progress, regProgress]);
 
   // URL routing effect — see comment near the top of the component for
   // the lifecycle → URL mapping. Lives down here so it can read the
@@ -617,6 +622,26 @@ export default function YearOverviewPage() {
   // go straight `/apply` → `/dashboard` in one hop.
   useEffect(() => {
     if (loading) return;
+
+    // One `router.replace` per run. Two dispatched in the same effect
+    // flush (this page used to send /welcome from one effect and
+    // /dashboard from another) race in the router: Next discards the
+    // earlier one, so the winner depended on effect order, and the
+    // losing fetch still went out.
+    if (family === null) {
+      if (familyProgressLoading || regProgressLoading) return;
+      // No application state anywhere: a signed-in user who never
+      // created a family. With progress rows present the null is a
+      // stale cache (repaired above) and lifecycle routing proceeds.
+      // A progress fetch that FAILED proves nothing either way, so
+      // hold: the error card (below) is the right outcome for that.
+      if (familyProgressError || regProgressError) return;
+      if (!progress && !regProgress) {
+        router.replace("/welcome");
+        return;
+      }
+    }
+
     const onApply = pathname.startsWith(`/apply/year/${yearId}`);
     const onRegistration = pathname.startsWith(`/registration/year/${yearId}`);
 
@@ -657,6 +682,12 @@ export default function YearOverviewPage() {
     yearPackets,
     isEnrolled,
     isRegistrationSubmitted,
+    family,
+    progress,
+    familyProgressLoading,
+    regProgressLoading,
+    familyProgressError,
+    regProgressError,
   ]);
 
   const submitSections: SectionStatus[] = useMemo(

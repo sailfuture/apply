@@ -65,18 +65,31 @@ export const apiFetcher = async (url: string) => {
 
 const fetcher = apiFetcher;
 
-export function useFamily() {
-  return useSWR("/api/families", fetcher, {
+/** `{ enabled: false }` holds the fetch (SWR key `null`). The header
+ *  passes it on `/sign-in` and `/sign-up`: there is no session yet, so
+ *  every call would 401, wait on clerk-js, retry, and 401 again — and
+ *  the same key was then read as settled on the first page after
+ *  sign-in. Defaults to enabled everywhere else. */
+export interface ApiHookOptions {
+  enabled?: boolean;
+}
+
+export function useFamily(opts?: ApiHookOptions) {
+  return useSWR(opts?.enabled === false ? null : "/api/families", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000,
   });
 }
 
-export function useSchoolYears() {
-  return useSWR("/api/school-years", fetcher, {
-    revalidateOnFocus: false,
-    dedupingInterval: 30000,
-  });
+export function useSchoolYears(opts?: ApiHookOptions) {
+  return useSWR(
+    opts?.enabled === false ? null : "/api/school-years",
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 30000,
+    }
+  );
 }
 
 /**
@@ -88,8 +101,8 @@ export function useSchoolYears() {
  * missing from the parent's dashboard after they navigated away and
  * back.
  */
-export function useStudents() {
-  return useSWR("/api/students", fetcher, {
+export function useStudents(opts?: ApiHookOptions) {
+  return useSWR(opts?.enabled === false ? null : "/api/students", fetcher, {
     revalidateOnFocus: true,
     dedupingInterval: 10000,
   });

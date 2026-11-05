@@ -287,11 +287,17 @@ export default function EnrolledHomePage() {
   // `?yearId=X`. The dashboard cards (Tuition, Volunteer Hours) read
   // this back when building their hrefs so the parent lands on the
   // right year — without it, sub-pages fall back to "no students found."
+  //
+  // Native `replaceState`, not `router.replace`: Next syncs
+  // `useSearchParams` from it with no server round trip, so the
+  // dashboard that just rendered stays mounted. The router call
+  // re-fetched the page segment and remounted it under the route's
+  // loading boundary — a fourth navigation on every sign-in landing.
   useEffect(() => {
     if (targetYearId === null) return;
     if (requestedYearId === targetYearId) return;
-    router.replace(`/dashboard?yearId=${targetYearId}`);
-  }, [targetYearId, requestedYearId, router]);
+    window.history.replaceState(null, "", `/dashboard?yearId=${targetYearId}`);
+  }, [targetYearId, requestedYearId]);
 
   // Surface a friendly "we're making improvements" card once any of the
   // three fetches has exhausted SWR's retry budget (capped at 3 in

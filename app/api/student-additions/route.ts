@@ -1,6 +1,7 @@
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { syncFamilyNameWithStudents } from "@/lib/family-name-sync";
 
 /**
  * Add a new student to an already-enrolled (non-residential) family's
@@ -134,6 +135,8 @@ export async function POST(req: NextRequest) {
       registration_students_id: [...existingStudentIds, student.id],
     });
   }
+  // The family name carries the roster: "Adams Family (Jorden, Matthew)".
+  await syncFamilyNameWithStudents(familyId);
 
   // 2. Open the marked application for the year — the standard
   //    `/api/applications` POST shape plus the mid-year marker.

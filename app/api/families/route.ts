@@ -3,6 +3,7 @@ import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano, ensureParentRecord } from "@/lib/xano";
 import { smsConsentParentFields } from "@/lib/sms/consent";
+import { familyNameWithStudents } from "@/lib/family-name";
 
 async function resolveParents(family: ReturnType<typeof xano.families.getById> extends Promise<infer T> ? T : never) {
   const embedded = xano.families.getEmbeddedParents(family);
@@ -231,6 +232,15 @@ export async function PATCH(req: NextRequest) {
   }
 
   const body = await req.json();
+  // A parent renaming the family keeps the "(Student, Student)" roster
+  // suffix: they type the base name, the suffix follows the roster.
+  if (typeof body?.family_name === "string" && body.family_name.trim()) {
+    const students = await xano.students.getByFamilyId(familyId);
+    body.family_name = familyNameWithStudents(
+      body.family_name,
+      students.map((s) => s.first_name)
+    );
+  }
   const updated = await xano.families.update(familyId, body);
   return NextResponse.json(updated, { status: 200 });
 }

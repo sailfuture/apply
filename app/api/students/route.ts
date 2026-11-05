@@ -1,6 +1,7 @@
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { syncFamilyNameWithStudents } from "@/lib/family-name-sync";
 
 export async function GET() {
   const session = await getFamilyAuth();
@@ -96,6 +97,8 @@ export async function POST(req: NextRequest) {
   await xano.families.update(familyId, {
     registration_students_id: [...existingStudentIds, student.id],
   });
+  // The family name carries the roster: "Adams Family (Jorden, Matthew)".
+  await syncFamilyNameWithStudents(familyId);
 
   return NextResponse.json(student, { status: 201 });
 }
