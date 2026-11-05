@@ -389,6 +389,13 @@ function shapeParent(p: XanoParent) {
     email: p.email ?? "",
     phone: p.phone ?? "",
     relationship: p.relationship ?? "",
+    // Mailing address — read and inline-edited on the Family
+    // Information card alongside the contact fields.
+    address_line_1: p.address_line_1 ?? "",
+    address_line_2: p.address_line_2 ?? "",
+    city: p.city ?? "",
+    state: p.state ?? "",
+    zipcode: p.zipcode ?? "",
     // Surfaced so the Family Information card can render the invite
     // badge + "Resend invite" safety button per parent.
     invite_status: p.invite_status ?? "",

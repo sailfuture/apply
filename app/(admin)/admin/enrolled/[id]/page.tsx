@@ -87,6 +87,8 @@ import {
 } from "@/lib/format-note-time";
 import { formatDob } from "@/lib/dob";
 import { formatUSPhone } from "@/lib/phone";
+import { formatAddressOneLine } from "@/lib/address";
+import { StateSelect } from "@/components/state-select";
 import {
   generateSchoolEmail,
   generateSchoolPassword,
@@ -2220,6 +2222,125 @@ function EditField({
   );
 }
 
+/** Editable US-state picker — searchable-select counterpart to
+ *  `EditField`. Reuses the registration flow's `StateSelect` so the
+ *  stored value stays a two-letter code. */
+function EditStateField({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <StateSelect value={value} onChange={onChange} disabled={disabled} />
+    </Field>
+  );
+}
+
+/**
+ * Columns the parent / emergency-contact row editors on the Family
+ * Information card can edit. Both rows edit the same contact +
+ * mailing-address set, so one draft projection and one differ serve
+ * both components.
+ */
+const CONTACT_ROW_KEYS = [
+  "first_name",
+  "last_name",
+  "relationship",
+  "email",
+  "phone",
+  "address_line_1",
+  "address_line_2",
+  "city",
+  "state",
+  "zipcode",
+] as const;
+type ContactRowKey = (typeof CONTACT_ROW_KEYS)[number];
+type ContactRowDraft = Record<ContactRowKey, string>;
+type ContactRowSource = Partial<Record<ContactRowKey, string | null>>;
+
+/** Project a parent / emergency-contact row to the editor's draft.
+ *  Null or missing columns normalise to "" so every input stays
+ *  controlled. */
+function contactRowDraft(c: ContactRowSource): ContactRowDraft {
+  const draft = {} as ContactRowDraft;
+  for (const key of CONTACT_ROW_KEYS) draft[key] = c[key] ?? "";
+  return draft;
+}
+
+/** Diff-only patch for a row save — only columns whose trimmed value
+ *  changed are sent, so the PATCH stays targeted at what admin typed
+ *  and can't clobber edits made on another open admin tab. */
+function diffContactRow(
+  draft: ContactRowDraft,
+  current: ContactRowSource
+): Partial<ContactRowDraft> {
+  const patch: Partial<ContactRowDraft> = {};
+  for (const key of CONTACT_ROW_KEYS) {
+    const next = draft[key].trim();
+    if (next !== (current[key] ?? "").trim()) patch[key] = next;
+  }
+  return patch;
+}
+
+/** Mailing-address inputs shared by the parent and emergency-contact
+ *  row editors. Rendered inside the rows' two-column grid: the two
+ *  street lines take one cell each, then city / state / zip share a
+ *  full-width three-up row so the block reads like an envelope. */
+function AddressEditFields({
+  draft,
+  onChange,
+  disabled,
+}: {
+  draft: ContactRowDraft;
+  onChange: (patch: Partial<ContactRowDraft>) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <>
+      <EditField
+        label="Address line 1"
+        value={draft.address_line_1}
+        onChange={(v) => onChange({ address_line_1: v })}
+        disabled={disabled}
+      />
+      <EditField
+        label="Address line 2"
+        value={draft.address_line_2}
+        onChange={(v) => onChange({ address_line_2: v })}
+        disabled={disabled}
+      />
+      <div className="grid gap-4 grid-cols-1 sm:col-span-2 sm:grid-cols-3">
+        <EditField
+          label="City"
+          value={draft.city}
+          onChange={(v) => onChange({ city: v })}
+          disabled={disabled}
+        />
+        <EditStateField
+          label="State"
+          value={draft.state}
+          onChange={(v) => onChange({ state: v })}
+          disabled={disabled}
+        />
+        <EditField
+          label="Zip"
+          value={draft.zipcode}
+          onChange={(v) => onChange({ zipcode: v })}
+          disabled={disabled}
+        />
+      </div>
+    </>
+  );
+}
+
 /** Editable Select field — paired with `EditField` for forms
  *  inside card edit modes. */
 function EditSelectField({
@@ -2789,22 +2910,10 @@ function ParentRowEditable({
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({
-    first_name: parent.first_name ?? "",
-    last_name: parent.last_name ?? "",
-    relationship: parent.relationship ?? "",
-    email: parent.email ?? "",
-    phone: parent.phone ?? "",
-  });
+  const [draft, setDraft] = useState(() => contactRowDraft(parent));
 
   function enterEdit() {
-    setDraft({
-      first_name: parent.first_name ?? "",
-      last_name: parent.last_name ?? "",
-      relationship: parent.relationship ?? "",
-      email: parent.email ?? "",
-      phone: parent.phone ?? "",
-    });
+    setDraft(contactRowDraft(parent));
     setEditing(true);
   }
 
@@ -2812,17 +2921,7 @@ function ParentRowEditable({
     // Diff-only patch — keeps the request body lean and avoids
     // overwriting columns the form didn't touch (which would race
     // against concurrent edits on another open admin tab).
-    const patch: Record<string, string> = {};
-    if (draft.first_name.trim() !== (parent.first_name ?? "").trim())
-      patch.first_name = draft.first_name.trim();
-    if (draft.last_name.trim() !== (parent.last_name ?? "").trim())
-      patch.last_name = draft.last_name.trim();
-    if (draft.relationship.trim() !== (parent.relationship ?? "").trim())
-      patch.relationship = draft.relationship.trim();
-    if (draft.email.trim() !== (parent.email ?? "").trim())
-      patch.email = draft.email.trim();
-    if (draft.phone.trim() !== (parent.phone ?? "").trim())
-      patch.phone = draft.phone.trim();
+    const patch = diffContactRow(draft, parent);
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -2931,6 +3030,11 @@ function ParentRowEditable({
               onChange={(v) => setDraft((d) => ({ ...d, phone: v }))}
               disabled={saving}
             />
+            <AddressEditFields
+              draft={draft}
+              onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+              disabled={saving}
+            />
           </>
         ) : (
           <>
@@ -2944,6 +3048,12 @@ function ParentRowEditable({
               label="Phone"
               value={parent.phone ? formatUSPhone(parent.phone) : ""}
             />
+            <div className="sm:col-span-2">
+              <ReadField
+                label="Address"
+                value={formatAddressOneLine(parent)}
+              />
+            </div>
           </>
         )}
       </div>
@@ -2968,37 +3078,15 @@ function EmergencyContactRowEditable({
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({
-    first_name: contact.first_name ?? "",
-    last_name: contact.last_name ?? "",
-    relationship: contact.relationship ?? "",
-    email: contact.email ?? "",
-    phone: contact.phone ?? "",
-  });
+  const [draft, setDraft] = useState(() => contactRowDraft(contact));
 
   function enterEdit() {
-    setDraft({
-      first_name: contact.first_name ?? "",
-      last_name: contact.last_name ?? "",
-      relationship: contact.relationship ?? "",
-      email: contact.email ?? "",
-      phone: contact.phone ?? "",
-    });
+    setDraft(contactRowDraft(contact));
     setEditing(true);
   }
 
   async function runSave() {
-    const patch: Record<string, string> = {};
-    if (draft.first_name.trim() !== (contact.first_name ?? "").trim())
-      patch.first_name = draft.first_name.trim();
-    if (draft.last_name.trim() !== (contact.last_name ?? "").trim())
-      patch.last_name = draft.last_name.trim();
-    if (draft.relationship.trim() !== (contact.relationship ?? "").trim())
-      patch.relationship = draft.relationship.trim();
-    if (draft.email.trim() !== (contact.email ?? "").trim())
-      patch.email = draft.email.trim();
-    if (draft.phone.trim() !== (contact.phone ?? "").trim())
-      patch.phone = draft.phone.trim();
+    const patch = diffContactRow(draft, contact);
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -3093,6 +3181,11 @@ function EmergencyContactRowEditable({
               onChange={(v) => setDraft((d) => ({ ...d, phone: v }))}
               disabled={saving}
             />
+            <AddressEditFields
+              draft={draft}
+              onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+              disabled={saving}
+            />
           </>
         ) : (
           <>
@@ -3106,6 +3199,12 @@ function EmergencyContactRowEditable({
               label="Phone"
               value={contact.phone ? formatUSPhone(contact.phone) : ""}
             />
+            <div className="sm:col-span-2">
+              <ReadField
+                label="Address"
+                value={formatAddressOneLine(contact)}
+              />
+            </div>
           </>
         )}
       </div>
