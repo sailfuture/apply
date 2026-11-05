@@ -54,6 +54,7 @@ import {
   isReturnedAddition,
 } from "@/lib/midyear-additions";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 
 type Parent = {
   id: number;
@@ -1094,10 +1095,10 @@ export function EnrolledFamilyDashboard({
         </a>{" "}
         or{" "}
         <a
-          href="tel:+17279001436"
+          href={`tel:${MAIN_LINE}`}
           className="text-primary underline underline-offset-2"
         >
-          (727) 900-1436
+          {MAIN_LINE_DISPLAY}
         </a>
         .
       </p>

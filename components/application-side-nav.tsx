@@ -5,6 +5,7 @@ import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-st
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Mail, Phone, HelpCircle, ArrowLeft } from "lucide-react";
 import { ParentNotesSheet } from "@/components/parent-notes-sheet";
+import { MAIN_LINE } from "@/lib/school-phones";
 
 /* Short labels for the side nav — keeps everything single-line */
 const SHORT_LABELS: Record<string, string> = {
@@ -229,7 +230,7 @@ export function ApplicationSideNavPanel({
               <span>Email Support</span>
             </a>
             <a
-              href="tel:+17279001436"
+              href={`tel:${MAIN_LINE}`}
               className="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
             >
               <Phone className="size-4 shrink-0" />

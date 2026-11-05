@@ -15,6 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 
 export interface RecordsRequestFields {
   /** Full student name, e.g. "Charlee Howard". */
@@ -203,7 +204,7 @@ export async function generateRecordsRequestPdf(
   gap();
 
   paragraph(
-    "Should you require further information to fulfill this request, please contact us at (727) 900-1436, lmanke@sailfuture.org, or dean@sailfuture.org."
+    `Should you require further information to fulfill this request, please contact us at ${MAIN_LINE_DISPLAY}, lmanke@sailfuture.org, or dean@sailfuture.org.`
   );
 
   // ── Signature ───────────────────────────────────────────────────

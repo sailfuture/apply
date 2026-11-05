@@ -68,6 +68,7 @@ import {
   FileUploadList,
   FileUploadTrigger,
 } from "@/components/ui/file-upload";
+import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 
 interface SchoolYear {
   id: number;
@@ -3642,7 +3643,7 @@ export function FinancialAidStep({
                 Once you&apos;ve confirmed the application, please sign below and we&apos;ll proceed with the final review of your tuition amount. Should you have any questions or concerns, please don&apos;t hesitate to reach out at{" "}
                 <a href="mailto:admissions@sailfuture.org" className="text-primary underline">admissions@sailfuture.org</a>
                 {" "}or{" "}
-                <a href="tel:+17279001436" className="text-primary underline">(727) 900-1436</a>
+                <a href={`tel:${MAIN_LINE}`} className="text-primary underline">{MAIN_LINE_DISPLAY}</a>
               </p>
               <p className="text-sm font-medium mb-4">
                 I hereby certify that all the information provided in this application is accurate and complete to the best of my knowledge. I understand that any falsification or omission of information may result in disqualification from the scholarship program.

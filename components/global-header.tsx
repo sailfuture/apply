@@ -6,6 +6,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { useFamily, useSchoolYears, useStudents } from "@/hooks/use-api";
 import { familyNameWithStudents } from "@/lib/family-name";
+import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 
 const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
 
@@ -225,10 +226,10 @@ export function GlobalHeader() {
               </a>
               <span aria-hidden="true">&bull;</span>
               <a
-                href="tel:+17279001436"
+                href={`tel:${MAIN_LINE}`}
                 className="hover:text-primary transition-colors"
               >
-                (727) 900-1436
+                {MAIN_LINE_DISPLAY}
               </a>
             </div>
           </div>

@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner";
 import confetti from "canvas-confetti";
 import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
+import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 
 function StepCircle({ number, status }: { number: number; status: StepStatus }) {
   if (status === "complete") {
@@ -247,10 +248,10 @@ function RegistrationPendingView({
           </a>{" "}
           or call{" "}
           <a
-            href="tel:+17279001436"
+            href={`tel:${MAIN_LINE}`}
             className="text-primary underline underline-offset-2"
           >
-            (727) 900-1436
+            {MAIN_LINE_DISPLAY}
           </a>
           .
         </p>
@@ -456,10 +457,10 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
           </a>{" "}
           or call{" "}
           <a
-            href="tel:+17279001436"
+            href={`tel:${MAIN_LINE}`}
             className="text-primary underline underline-offset-2"
           >
-            (727) 900-1436
+            {MAIN_LINE_DISPLAY}
           </a>
           .
         </p>
@@ -1178,10 +1179,10 @@ export default function YearOverviewPage() {
           </a>{" "}
           or call{" "}
           <a
-            href="tel:+17279001436"
+            href={`tel:${MAIN_LINE}`}
             className="text-primary underline underline-offset-2"
           >
-            (727) 900-1436
+            {MAIN_LINE_DISPLAY}
           </a>
           .
         </p>
