@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { sortYearsOldestFirst } from "@/lib/school-years";
+import { adminWorkingYears } from "@/lib/school-year-default";
 import { formatUSPhone, validateUSPhone } from "@/lib/phone";
 import {
   SendLaterField,
@@ -63,8 +64,11 @@ import type {
 interface SchoolYear {
   id: number;
   year_name: string;
+  start_date?: string | null;
   isActive?: boolean;
+  isNextYear?: boolean;
   isPast?: boolean;
+  isFuture?: boolean;
 }
 
 /** Stage badge styling — the ladder reads furthest-along first, same
@@ -206,8 +210,13 @@ export function GroupMessageDialog({
     open ? "/api/admin/school-years" : null,
     adminFetcher
   );
+  // Working years only (past, current, upcoming) — a blast is never
+  // addressed to a year beyond the upcoming one.
   const years = useMemo<SchoolYear[]>(
-    () => sortYearsOldestFirst(Array.isArray(yearsData) ? yearsData : []),
+    () =>
+      adminWorkingYears(
+        sortYearsOldestFirst(Array.isArray(yearsData) ? yearsData : [])
+      ),
     [yearsData]
   );
 

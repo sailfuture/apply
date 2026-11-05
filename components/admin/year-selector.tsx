@@ -18,7 +18,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { resolveAdminYear, sortAdminYears } from "@/lib/school-year-default";
+import {
+  adminWorkingYears,
+  resolveAdminYear,
+  sortAdminYears,
+} from "@/lib/school-year-default";
 import {
   isFamilyRecordPath,
   readRememberedAdminYearId,
@@ -37,6 +41,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 interface SchoolYear {
   id: number;
   year_name: string;
+  start_date?: string | null;
   isActive?: boolean;
   isNextYear?: boolean;
   isPast?: boolean;
@@ -95,19 +100,24 @@ export function YearSelector() {
     fetcher
   );
 
-  // Sort: upcoming/next year first, then active, then future, then past.
-  // Within each group, newer years (higher year_name string) come first.
-  // Both the order and the default live in lib/school-year-default.ts,
+  // The years admin works in — upcoming first, then active, then
+  // past, newer first within each group. Years beyond the upcoming
+  // one (anything flagged Future, e.g. 2028-2029) are left out: they
+  // exist for lead tagging and year setup, not for working in.
+  // Both the list and the default live in lib/school-year-default.ts,
   // shared with the server routes that answer before this component
   // has injected the year (the Messages inbox feed) — the two must
   // pick the same year or that page would re-fetch for another.
   const years = useMemo(
-    () => (Array.isArray(yearsRaw) ? sortAdminYears(yearsRaw) : []),
+    () =>
+      Array.isArray(yearsRaw)
+        ? adminWorkingYears(sortAdminYears(yearsRaw))
+        : [],
     [yearsRaw]
   );
 
   // The year a URL without `?yearId=` resolves to: the one this
-  // browser last worked in, else the default rule (upcoming year).
+  // browser last worked in, else the default rule (the live year).
   const rememberedYearId = useRememberedAdminYearId();
   const defaultYear = useMemo(
     () => resolveAdminYear(years, rememberedYearId),

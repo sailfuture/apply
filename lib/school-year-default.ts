@@ -15,10 +15,47 @@
 export interface AdminYearLike {
   id: number;
   year_name?: string | null;
+  /** ISO date; places an unflagged row on the timeline. */
+  start_date?: string | null;
   isActive?: boolean;
   isNextYear?: boolean;
   isPast?: boolean;
   isFuture?: boolean;
+}
+
+/** Calendar year a row starts in, from `start_date` else the first
+ *  four digits of `year_name` ("2027-2028" → 2027); NaN if neither. */
+function startYearOf(y: AdminYearLike): number {
+  return Number.parseInt((y.start_date ?? y.year_name ?? "").slice(0, 4), 10);
+}
+
+/**
+ * Is `y` a year the admin tool works in: the live year, enrollment's
+ * upcoming year, or history? Years further out — flagged `isFuture`,
+ * or unflagged rows that start after the upcoming year — exist so a
+ * lead can be tagged for them and so admin can set them up ahead of
+ * time; they never appear in a working-year picker and are never the
+ * default (user request, 2026-11-05: the tool kept opening on
+ * 2027-2028). An unflagged row that starts BEFORE the live year is
+ * history whose `isPast` flag was never set (2023-2024), so it stays.
+ */
+export function isAdminWorkingYear<T extends AdminYearLike>(
+  y: T,
+  years: readonly T[]
+): boolean {
+  if (y.isActive || y.isNextYear || y.isPast) return true;
+  if (y.isFuture) return false;
+  const horizon =
+    years.find((o) => o.isNextYear) ?? years.find((o) => o.isActive);
+  if (!horizon) return true;
+  const start = startYearOf(y);
+  const limit = startYearOf(horizon);
+  return Number.isFinite(start) && Number.isFinite(limit) && start < limit;
+}
+
+/** The years a working-year picker lists, in the given order. */
+export function adminWorkingYears<T extends AdminYearLike>(years: T[]): T[] {
+  return years.filter((y) => isAdminWorkingYear(y, years));
 }
 
 /** Upcoming year first, then active, then future, then past. Within
@@ -37,15 +74,18 @@ export function sortAdminYears<T extends AdminYearLike>(years: T[]): T[] {
   });
 }
 
-/** The year the admin tool opens on: enrollment's upcoming year, else
- *  the live year, else whatever sorts first. Null for an empty list. */
+/** The year the admin tool opens on: the live year, else enrollment's
+ *  upcoming year, else whatever working year sorts first. Null for an
+ *  empty list. The live year comes first (since 2026-11-05) because
+ *  the upcoming year is flagged months before anyone works in it, and
+ *  a browser without the remembered-year cookie kept landing there. */
 export function defaultAdminYear<T extends AdminYearLike>(
   years: T[]
 ): T | null {
-  const sorted = sortAdminYears(years);
+  const sorted = adminWorkingYears(sortAdminYears(years));
   return (
-    sorted.find((y) => y.isNextYear) ??
     sorted.find((y) => y.isActive) ??
+    sorted.find((y) => y.isNextYear) ??
     sorted[0] ??
     null
   );
@@ -63,12 +103,18 @@ export function parseAdminYearId(value: string | null | undefined): number | nul
 }
 
 /** The year to show when the URL names none: the remembered one while
- *  it still exists, else `defaultAdminYear`. */
+ *  it still exists and is still a working year, else
+ *  `defaultAdminYear`. A cookie left pointing at a year that has since
+ *  moved out past the upcoming one falls back instead of reopening it. */
 export function resolveAdminYear<T extends AdminYearLike>(
   years: T[],
   rememberedId: number | null
 ): T | null {
   const remembered =
-    rememberedId !== null ? years.find((y) => y.id === rememberedId) : undefined;
+    rememberedId !== null
+      ? years.find(
+          (y) => y.id === rememberedId && isAdminWorkingYear(y, years)
+        )
+      : undefined;
   return remembered ?? defaultAdminYear(years);
 }

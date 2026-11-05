@@ -22,10 +22,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { adminWorkingYears } from "@/lib/school-year-default";
 
 interface AdminYear {
   id: number;
   year_name: string;
+  start_date?: string | null;
   isActive?: boolean;
   isNextYear?: boolean;
   isFuture?: boolean;
@@ -158,11 +160,13 @@ export function MoveApplicationYearButton({
     open ? "/api/admin/school-years" : null,
     adminFetcher
   );
-  // Every year but the one they're on. This used to offer only the
+  // Every working year (past, current, upcoming) but the one they're
+  // on; years beyond the upcoming one aren't offered, since nobody
+  // files an application two years out. This used to offer only the
   // years flagged Active / Next Year, which left the dropdown empty
   // (and unclickable) whenever the family was already on one of them
   // and the other wasn't flagged.
-  const options = (Array.isArray(data) ? data : [])
+  const options = adminWorkingYears(Array.isArray(data) ? data : [])
     .filter((y) => y.id !== yearId)
     .sort((a, b) => yearRank(a) - yearRank(b));
   const targetName = options.find((y) => String(y.id) === target)?.year_name;
