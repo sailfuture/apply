@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { buildStageIndex, type StageTarget } from "@/lib/admin-stage";
 import { xano } from "@/lib/xano";
 
 /**
@@ -49,6 +50,8 @@ async function handleGET(req: NextRequest) {
       parentsResult,
       appsResult,
       studentsResult,
+      regProgressResult,
+      packetsResult,
     ] = await Promise.allSettled([
       xano.familyApplicationProgress.getByYear(yearId),
       xano.families.getAll(),
@@ -59,6 +62,12 @@ async function handleGET(req: NextRequest) {
       // The registrations list does the same thing — keeps the two
       // surfaces feeling consistent.
       xano.students.getAll(),
+      // Registration-side rows for the year: the confirmation latch
+      // and the per-student packets decide whether a row's name link
+      // opens the registration page or the enrolled student instead
+      // of this application (see `lib/admin-stage`).
+      xano.studentRegistrationProgress.getByYear(yearId),
+      xano.studentRegistration.getByYear(yearId),
     ]);
 
     if (applyResult.status === "rejected") {
@@ -91,6 +100,18 @@ async function handleGET(req: NextRequest) {
         studentsResult.reason
       );
     }
+    if (regProgressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load registration progress:",
+        regProgressResult.reason
+      );
+    }
+    if (packetsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load registration packets:",
+        packetsResult.reason
+      );
+    }
 
     const applyRows =
       applyResult.status === "fulfilled" ? applyResult.value : [];
@@ -101,7 +122,25 @@ async function handleGET(req: NextRequest) {
     const apps = appsResult.status === "fulfilled" ? appsResult.value : [];
     const studentsAll =
       studentsResult.status === "fulfilled" ? studentsResult.value : [];
+    const regRows =
+      regProgressResult.status === "fulfilled" ? regProgressResult.value : [];
+    const packets =
+      packetsResult.status === "fulfilled" ? packetsResult.value : [];
     const studentById = new Map(studentsAll.map((s) => [s.id, s]));
+
+    // Where each family's name link opens — this application while
+    // they're applying, the registration page once accepted, the
+    // enrolled student (or the family overview) once confirmed.
+    const stageIndex = buildStageIndex(
+      {
+        applyProgress: applyRows,
+        regProgress: regRows,
+        applications: apps,
+        students: studentsAll,
+        packets,
+      },
+      { preferredYearId: yearId }
+    );
 
     const familyById = new Map(families.map((f) => [f.id, f]));
 
@@ -178,6 +217,7 @@ async function handleGET(req: NextRequest) {
         family_id: p.registration_families_id,
         year_id: p.registration_school_years_id,
         flow_type: isReEnrollment ? "reapply" : "apply",
+        target: stageIndex.family(p.registration_families_id, yearId),
         ...labels,
         family_done: !!p.family_completed,
         students_done: !!p.students_completed,
@@ -230,6 +270,11 @@ export interface UnifiedAppRow {
   family_id: number;
   year_id: number;
   flow_type: "apply" | "reapply";
+  /** Where the family's name link opens: this year's stage page —
+   *  the application review, the registration page once accepted,
+   *  the enrolled student / family overview once confirmed. Build the
+   *  URL with `stageHref` (lib/admin-stage). */
+  target: StageTarget;
   family_name: string;
   primary_name: string;
   primary_email: string;

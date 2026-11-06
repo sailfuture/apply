@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { buildStageIndex, type StageTarget } from "@/lib/admin-stage";
 import { xano } from "@/lib/xano";
 import type { XanoSchoolYear } from "@/lib/xano";
 
@@ -92,6 +93,8 @@ async function handleGET(req: NextRequest) {
       familiesResult,
       parentsResult,
       yearsResult,
+      applyProgressResult,
+      regProgressResult,
     ] = await Promise.allSettled([
       xano.studentRegistration.getAll(),
       xano.applications.getAll(),
@@ -99,6 +102,11 @@ async function handleGET(req: NextRequest) {
       xano.families.getAll(),
       xano.parents.getAll(),
       xano.schoolYears.getAll(),
+      // The year's pipeline rows — acceptance and the family
+      // confirmation latch decide where a not-yet-enrolled row's
+      // link opens (registration page vs application review).
+      xano.familyApplicationProgress.getByYear(yearId),
+      xano.studentRegistrationProgress.getByYear(yearId),
     ]);
 
     if (packetsResult.status === "rejected") {
@@ -137,6 +145,18 @@ async function handleGET(req: NextRequest) {
         parentsResult.reason
       );
     }
+    if (applyProgressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/enrolled] failed to load apply progress:",
+        applyProgressResult.reason
+      );
+    }
+    if (regProgressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/enrolled] failed to load registration progress:",
+        regProgressResult.reason
+      );
+    }
 
     // Every packet across every year. The selected year's slice is
     // pulled out below for the waiver / verified-at side join; the
@@ -156,6 +176,12 @@ async function handleGET(req: NextRequest) {
       familiesResult.status === "fulfilled" ? familiesResult.value : [];
     const parents =
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
+    const applyProgressRows =
+      applyProgressResult.status === "fulfilled"
+        ? applyProgressResult.value
+        : [];
+    const regProgressRows =
+      regProgressResult.status === "fulfilled" ? regProgressResult.value : [];
 
     const familyById = new Map(families.map((f) => [f.id, f]));
     // Per-student app for the year — gives us the current grade. Map by
@@ -166,6 +192,22 @@ async function handleGET(req: NextRequest) {
       if (a.isActive === false) continue;
       appByStudent.set(Number(a.registration_students_id), a);
     }
+
+    // Where each row's links open — the student's own page when
+    // enrolled or unenrolled, else the family's stage page for the
+    // year (registration once accepted, the application review
+    // before). Shared rule with the search box and the other lists
+    // (lib/admin-stage).
+    const stageIndex = buildStageIndex(
+      {
+        applyProgress: applyProgressRows,
+        regProgress: regProgressRows,
+        applications: [...appByStudent.values()],
+        students,
+        packets,
+      },
+      { preferredYearId: yearId }
+    );
 
     // ── First-enrolled ("cohort") year, per student ──────────────
     //
@@ -389,6 +431,10 @@ async function handleGET(req: NextRequest) {
           liability_waiver_pdf_url: packet?.liability_waiver_pdf_url ?? "",
           is_enrolled: isEnrolled,
           is_archived: student.isArchived === true,
+          target:
+            stageIndex.student(studentId, yearId) ??
+            stageIndex.family(familyId, yearId),
+          family_target: stageIndex.family(familyId, yearId),
           // Required-document states for the row-click detail sheet —
           // same derivation as the Registrations list (submitted =
           // parent uploaded files, approved = admin doc-confirm).
@@ -553,6 +599,14 @@ export interface EnrolledStudentRow {
    *  `isEnrolled=false` + reason/date/notes). Distinguishes
    *  "never enrolled yet" from "was enrolled and later removed". */
   is_archived: boolean;
+  /** Where the student's name opens — their own page when enrolled
+   *  or unenrolled, else the family's stage page for the year
+   *  (`stageHref` in lib/admin-stage). */
+  target: StageTarget;
+  /** Where the family cell opens — the family's stage page for the
+   *  year: the enrolled student / family overview once confirmed, the
+   *  registration page once accepted, else the application review. */
+  family_target: StageTarget;
   /** Index signature so the row matches `DataTable`'s
    *  `<T extends Record<string, unknown>>` constraint without a
    *  client-side cast. Mirrors the same pattern on

@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import type { AdmissionStage } from "@/lib/admin-stage";
 import { cn } from "@/lib/utils";
 import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 
@@ -50,7 +51,7 @@ import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overvie
  * render a dropdown. Enrollment links carry `from=<current stage>`
  * so the student page's back button returns HERE.
  */
-export type AdmissionStage = "application" | "registration" | "enrollment";
+export type { AdmissionStage };
 
 export function StageNav({
   current,

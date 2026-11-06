@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { stageHref, type StageTarget } from "@/lib/admin-stage";
 
 /**
  * Dashboard section: the current school year's applications next to
@@ -30,6 +31,8 @@ interface ApplicationRow {
   family_id: number;
   year_id: number;
   flow_type: "apply" | "reapply";
+  /** The family's current stage page for the year (lib/admin-stage). */
+  target: StageTarget;
   family_name: string;
   student_names: string;
   sections_complete: number;
@@ -225,7 +228,7 @@ function YearApplicationsCard({
               return (
                 <li key={r.family_id}>
                   <Link
-                    href={`/admin/families/${r.family_id}?yearId=${year.id}`}
+                    href={stageHref(r.target)}
                     className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50"
                   >
                     <div className="min-w-0 flex-1">

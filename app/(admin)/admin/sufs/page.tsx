@@ -27,6 +27,7 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import { cn } from "@/lib/utils";
 import type { SufsStudentRow } from "@/app/api/admin/sufs/route";
+import { stageHref } from "@/lib/admin-stage";
 
 /**
  * Row shape driving the tables. `SufsStudentRow` from the API plus the
@@ -400,9 +401,12 @@ export default function SufsPage() {
     sortable: true,
     searchable: true,
     width: w,
+    // The student's CURRENT stage page — their enrolled page once
+    // confirmed, the registration page while accepted, else the
+    // application review (resolved by the route).
     render: (row) => (
       <Link
-        href={`/admin/registrations/${row.family_id}?yearId=${row.year_id}`}
+        href={stageHref(row.target)}
         className="block min-w-0 hover:underline"
         onClick={(e) => e.stopPropagation()}
       >

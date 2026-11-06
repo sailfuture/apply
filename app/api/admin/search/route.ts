@@ -1,5 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { ADMIN_YEAR_COOKIE, parseAdminYearId } from "@/lib/school-year-default";
+import { buildStageIndex, type StageTarget } from "@/lib/admin-stage";
 import { xano } from "@/lib/xano";
 
 /**
@@ -11,28 +13,29 @@ import { xano } from "@/lib/xano";
  * response, so an index-then-filter design gives instant keystroke
  * feedback.
  *
- * Every result carries a pipeline `stage` so the dropdown answers
- * "where is this person in the funnel" at a glance:
- *
- *   inquiry → application → registration → enrollment
- *
- * Family stage is the family's MOST-ADVANCED position across all
- * years (same signals as /api/admin/pipeline: apply-progress
- * `isAccepted` moves application → registration, the
- * `isRegistrationConfirmed` latch or a currently-enrolled student
- * moves registration → enrollment). Most-advanced beats
- * latest-year here because a re-enrollment application for next
- * year shouldn't relabel an enrolled family "Application".
- * Students and parents inherit their family's stage; standalone
- * inquiry rows are the "inquiry" stage (converted inquiries are
- * excluded — they exist as families).
+ * Every result carries a resolved `target` — the family's or the
+ * student's CURRENT stage page (application review / registration /
+ * the enrolled student page) and the year it is scoped to — so the
+ * dropdown both answers "where is this person in the funnel" and
+ * lands on that page when picked. The resolution is the shared
+ * `lib/admin-stage` rule the list pages use: per student where the
+ * app distinguishes students (an enrolled student next to a sibling
+ * still applying), per family otherwise; a year that is not past
+ * beats a past one, then the most advanced stage, then the admin's
+ * working year (`?yearId=`, else the remembered-year cookie).
+ * Students and parents without a family of their own fall back to
+ * the application page; standalone inquiry rows are the "inquiry"
+ * stage (converted inquiries are excluded — they exist as families).
  *
  * Joins are isolated per table — a single Xano hiccup degrades that
  * group to empty instead of 500ing the route.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
+    const preferredYearId =
+      parseAdminYearId(req.nextUrl.searchParams.get("yearId")) ??
+      parseAdminYearId(req.cookies.get(ADMIN_YEAR_COOKIE)?.value);
 
     const [
       familiesResult,
@@ -41,6 +44,9 @@ export async function GET() {
       applyProgressResult,
       regProgressResult,
       inquiriesResult,
+      applicationsResult,
+      packetsResult,
+      yearsResult,
     ] = await Promise.allSettled([
       xano.families.getAll(),
       xano.parents.getAll(),
@@ -48,6 +54,9 @@ export async function GET() {
       xano.familyApplicationProgress.getAll(),
       xano.studentRegistrationProgress.getAll(),
       xano.inquiries.getAll(),
+      xano.applications.getAll(),
+      xano.studentRegistration.getAll(),
+      xano.schoolYears.getAll(),
     ]);
     for (const [label, result] of [
       ["families", familiesResult],
@@ -56,6 +65,9 @@ export async function GET() {
       ["apply progress", applyProgressResult],
       ["registration progress", regProgressResult],
       ["inquiries", inquiriesResult],
+      ["applications", applicationsResult],
+      ["registration packets", packetsResult],
+      ["school years", yearsResult],
     ] as const) {
       if (result.status === "rejected") {
         console.error(
@@ -78,6 +90,11 @@ export async function GET() {
       regProgressResult.status === "fulfilled" ? regProgressResult.value : [];
     const inquiries =
       inquiriesResult.status === "fulfilled" ? inquiriesResult.value : [];
+    const applications =
+      applicationsResult.status === "fulfilled" ? applicationsResult.value : [];
+    const packets =
+      packetsResult.status === "fulfilled" ? packetsResult.value : [];
+    const years = yearsResult.status === "fulfilled" ? yearsResult.value : [];
 
     const familyNameById = new Map(
       families.map((f) => [
@@ -109,30 +126,26 @@ export async function GET() {
       studentNamesByFamily.set(fid, arr);
     }
 
-    // Stage signals, most-advanced across years.
-    const acceptedFamilies = new Set<number>();
-    for (const r of applyRows) {
-      if (r.isAccepted) acceptedFamilies.add(Number(r.registration_families_id));
-    }
-    const confirmedFamilies = new Set<number>();
-    for (const r of regRows) {
-      if (r.isRegistrationConfirmed === true) {
-        confirmedFamilies.add(Number(r.registration_families_id));
+    const index = buildStageIndex(
+      {
+        applyProgress: applyRows,
+        regProgress: regRows,
+        applications,
+        students,
+        packets,
+        years,
+      },
+      { preferredYearId }
+    );
+    const familyTargets = new Map<number, StageTarget>();
+    const targetForFamily = (fid: number | null): StageTarget | null => {
+      if (!fid) return null;
+      let t = familyTargets.get(fid);
+      if (!t) {
+        t = index.family(fid, preferredYearId);
+        familyTargets.set(fid, t);
       }
-    }
-    for (const s of students) {
-      if (s.isEnrolled === true && s.isArchived !== true) {
-        confirmedFamilies.add(Number(s.registration_families_id));
-      }
-    }
-    // Every family row exists because someone signed up for the apply
-    // flow, so "application" is the floor even before a progress row
-    // appears.
-    const stageForFamily = (fid: number | null): SearchStage => {
-      if (!fid) return "application";
-      if (confirmedFamilies.has(fid)) return "enrollment";
-      if (acceptedFamilies.has(fid)) return "registration";
-      return "application";
+      return t;
     };
 
     // Inquiries that became families are represented by their family
@@ -145,23 +158,20 @@ export async function GET() {
         .filter(Boolean)
     );
 
-    const index: AdminSearchIndex = {
+    const payload: AdminSearchIndex = {
       students: students
         .map((s) => {
-          const fid = Number(s.registration_families_id);
+          const fid = Number(s.registration_families_id) || null;
           return {
             id: s.id,
             name:
               `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
               `Student #${s.id}`,
-            family_id: fid || null,
-            family_name: familyNameById.get(fid) ?? "",
-            is_enrolled: s.isEnrolled === true && s.isArchived !== true,
+            family_id: fid,
+            family_name: fid ? (familyNameById.get(fid) ?? "") : "",
             is_archived: s.isArchived === true,
-            stage:
-              s.isEnrolled === true && s.isArchived !== true
-                ? ("enrollment" as const)
-                : stageForFamily(fid || null),
+            target:
+              index.student(s.id, preferredYearId) ?? targetForFamily(fid),
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -177,7 +187,7 @@ export async function GET() {
             phone: p.phone ?? "",
             family_id: fid,
             family_name: fid ? (familyNameById.get(fid) ?? "") : "",
-            stage: stageForFamily(fid),
+            target: targetForFamily(fid),
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -186,7 +196,7 @@ export async function GET() {
           id: f.id,
           name: f.family_name?.trim() || `Family #${f.id}`,
           student_names: (studentNamesByFamily.get(f.id) ?? []).join(", "),
-          stage: stageForFamily(f.id),
+          target: targetForFamily(f.id)!,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
       inquiries: inquiries
@@ -210,14 +220,14 @@ export async function GET() {
         .sort((a, b) => a.name.localeCompare(b.name)),
     };
 
-    return NextResponse.json(index);
+    return NextResponse.json(payload);
   } catch (err) {
     return handleAdminError(err);
   }
 }
 
 /** Where the person sits in the admissions funnel. Derived, never
- *  stored — see the route doc for the signals. */
+ *  stored — see `lib/admin-stage` for the signals. */
 export type SearchStage =
   | "inquiry"
   | "application"
@@ -229,12 +239,12 @@ export interface AdminSearchStudent {
   name: string;
   family_id: number | null;
   family_name: string;
-  /** Currently enrolled (isEnrolled true and not archived) — drives
-   *  the deep link to the enrolled detail. */
-  is_enrolled: boolean;
   /** Unenrolled mid-year — the UI badges this over the stage. */
   is_archived: boolean;
-  stage: SearchStage;
+  /** The student's current stage page (their enrolled page when
+   *  enrolled or unenrolled, else the family's stage page); null only
+   *  for a student with no family. */
+  target: StageTarget | null;
 }
 
 export interface AdminSearchParent {
@@ -244,14 +254,17 @@ export interface AdminSearchParent {
   phone: string;
   family_id: number | null;
   family_name: string;
-  stage: SearchStage;
+  /** The family's current stage page; null when the parent has no
+   *  family (the row is then not navigable). */
+  target: StageTarget | null;
 }
 
 export interface AdminSearchFamily {
   id: number;
   name: string;
   student_names: string;
-  stage: SearchStage;
+  /** The family's current stage page. */
+  target: StageTarget;
 }
 
 /** A lead that hasn't applied yet — stage is always "inquiry". */

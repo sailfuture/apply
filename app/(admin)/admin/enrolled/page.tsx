@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { Button } from "@/components/ui/button";
 import type { ColumnDef } from "@/components/admin/data-table";
+import { stageHref } from "@/lib/admin-stage";
 import { Input } from "@/components/ui/input";
 import {
   Card,
@@ -408,7 +409,9 @@ export default function EnrolledStudentsPage() {
       // list, matching how the grade groups already order themselves.
       accessor: (row) =>
         `${row.student_last_name} ${row.student_first_name}`.trim(),
-      // Name click = full student page; the ROW click opens the
+      // Name click = the student's CURRENT page (their own page when
+      // enrolled or unenrolled, the family's registration page or
+      // application review before that); the ROW click opens the
       // quick-detail sheet, so this stops propagation.
       render: (row) => (
         <button
@@ -416,13 +419,7 @@ export default function EnrolledStudentsPage() {
           className="block max-w-full truncate text-left font-medium hover:underline"
           onClick={(e) => {
             e.stopPropagation();
-            router.push(
-              // familyId lets the detail page paint its family nav
-              // band before its payload lands.
-              `/admin/enrolled/${row.student_id}?yearId=${row.year_id}${
-                Number(row.family_id) > 0 ? `&familyId=${row.family_id}` : ""
-              }`
-            );
+            router.push(stageHref(row.target));
           }}
         >
           {row.student_full_name}
@@ -450,9 +447,11 @@ export default function EnrolledStudentsPage() {
       sortable: true,
       searchable: true,
       width: "w-[18%]",
-      // Family click = family overview page; stops propagation for
-      // the same reason as the student-name link above. Legacy rows
-      // without a family id fall back to plain text.
+      // Family click = the family's CURRENT stage page for the year
+      // (the overview or the one enrolled student once confirmed, the
+      // registration page or application review before); stops
+      // propagation for the same reason as the student-name link
+      // above. Legacy rows without a family id fall back to plain text.
       render: (row) =>
         Number(row.family_id) > 0 ? (
           <button
@@ -460,9 +459,7 @@ export default function EnrolledStudentsPage() {
             className="block max-w-full truncate text-left hover:underline"
             onClick={(e) => {
               e.stopPropagation();
-              router.push(
-                `/admin/families/${row.family_id}/overview?yearId=${row.year_id}`
-              );
+              router.push(stageHref(row.family_target));
             }}
           >
             {row.family_name}
@@ -633,13 +630,7 @@ export default function EnrolledStudentsPage() {
           row={sheetRow}
           onClose={() => setSheetRow(null)}
           onOpenFull={() => {
-            router.push(
-              `/admin/enrolled/${sheetRow.student_id}?yearId=${sheetRow.year_id}${
-                Number(sheetRow.family_id) > 0
-                  ? `&familyId=${sheetRow.family_id}`
-                  : ""
-              }`
-            );
+            router.push(stageHref(sheetRow.target));
           }}
         />
       ) : null}

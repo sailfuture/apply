@@ -1,6 +1,7 @@
 import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { buildStageIndex, type StageTarget } from "@/lib/admin-stage";
 import { xano, toIdOrNull } from "@/lib/xano";
 
 /**
@@ -46,6 +47,7 @@ async function handleGET(req: NextRequest) {
       parentsResult,
       appsResult,
       studentsResult,
+      packetsResult,
     ] = await Promise.allSettled([
       xano.familyApplicationProgress.getByYear(yearId),
       xano.studentRegistrationProgress.getByYear(yearId),
@@ -53,6 +55,10 @@ async function handleGET(req: NextRequest) {
       xano.parents.getAll(),
       xano.applications.getAll(),
       xano.students.getAll(),
+      // Per-student packets — a confirmed packet is what makes a
+      // residential placement enrolled (no family-level latch fires
+      // for them); feeds each card's link target only.
+      xano.studentRegistration.getByYear(yearId),
     ]);
 
     for (const [label, result] of [
@@ -62,6 +68,7 @@ async function handleGET(req: NextRequest) {
       ["parents list", parentsResult],
       ["applications list", appsResult],
       ["students list", studentsResult],
+      ["registration packets", packetsResult],
     ] as const) {
       if (result.status === "rejected") {
         console.error(
@@ -82,6 +89,24 @@ async function handleGET(req: NextRequest) {
     const apps = appsResult.status === "fulfilled" ? appsResult.value : [];
     const studentsAll =
       studentsResult.status === "fulfilled" ? studentsResult.value : [];
+    const packets =
+      packetsResult.status === "fulfilled" ? packetsResult.value : [];
+
+    // Where each card's link opens — the stage page the family is on
+    // for this year (shared rule with the search and the lists; the
+    // board's own `stage` bucketing below stays as it was).
+    const stageIndex = buildStageIndex(
+      {
+        applyProgress: applyRows,
+        regProgress: regRows,
+        applications: apps.filter(
+          (a) => toIdOrNull(a.registration_school_years_id) === yearId
+        ),
+        students: studentsAll,
+        packets,
+      },
+      { preferredYearId: yearId }
+    );
 
     const familyById = new Map(families.map((f) => [f.id, f]));
     const studentById = new Map(studentsAll.map((s) => [s.id, s]));
@@ -176,6 +201,7 @@ async function handleGET(req: NextRequest) {
         family_id: familyId,
         year_id: p.registration_school_years_id,
         stage,
+        target: stageIndex.family(familyId, yearId),
         flow_type: p.type === "Re-Enrollment" ? "reapply" : "apply",
         family_name: family?.family_name?.trim() || `Family #${familyId}`,
         primary_name: primary
@@ -252,6 +278,10 @@ export interface PipelineFamilyRow {
   family_id: number;
   year_id: number;
   stage: PipelineStage;
+  /** Where the card opens: the family's stage page for this year
+   *  (`stageHref` in lib/admin-stage) — the application review, the
+   *  registration page, or the enrolled student / family overview. */
+  target: StageTarget;
   flow_type: "apply" | "reapply";
   family_name: string;
   primary_name: string;

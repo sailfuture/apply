@@ -38,6 +38,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { stageHref, type StageTarget } from "@/lib/admin-stage";
 import { cn } from "@/lib/utils";
 
 /**
@@ -53,6 +54,9 @@ interface RegStudentRow {
   student_id: number;
   family_id: number;
   year_id: number;
+  /** The family's stage page for the year (same on every student row
+   *  of a family) — what the folded family row links to. */
+  family_target: StageTarget;
   student_first_name: string;
   student_last_name: string;
   student_full_name: string;
@@ -121,6 +125,10 @@ interface RegFamilyRow {
   id: number;
   family_id: number;
   year_id: number;
+  /** Where the family's name opens — this registration while they
+   *  register, the enrolled student / family overview once confirmed
+   *  (`stageHref` in lib/admin-stage). */
+  target: StageTarget;
   family_name: string;
   primary_name: string;
   primary_email: string;
@@ -236,6 +244,7 @@ function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
       id: r.family_id,
       family_id: r.family_id,
       year_id: r.year_id,
+      target: r.family_target,
       family_name: r.family_name,
       primary_name: r.primary_name,
       primary_email: r.primary_email,
@@ -349,7 +358,9 @@ export default function RegistrationsPage() {
       sortable: true,
       searchable: true,
       width: "w-[20%]",
-      // Name click = full registration page; the ROW click opens the
+      // Name click = the family's CURRENT stage page (this
+      // registration while they register, the enrolled student or the
+      // family overview once confirmed); the ROW click opens the
       // activity sheet, so this stops propagation.
       render: (row) => (
         <button
@@ -357,9 +368,7 @@ export default function RegistrationsPage() {
           className="block max-w-full truncate text-left font-medium hover:underline"
           onClick={(e) => {
             e.stopPropagation();
-            router.push(
-              `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
-            );
+            router.push(stageHref(row.target));
           }}
         >
           {row.family_name}

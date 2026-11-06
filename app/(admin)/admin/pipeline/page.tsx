@@ -21,6 +21,7 @@ import {
 } from "@/components/admin/status-badge";
 import { PipelineExportDialog } from "@/components/admin/pipeline-export-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { stageHref } from "@/lib/admin-stage";
 import { cn } from "@/lib/utils";
 import type {
   PipelineFamilyRow,
@@ -421,11 +422,10 @@ export default function PipelinePage() {
                 key={stage.key}
                 stage={stage}
                 rows={byStage[stage.key]}
-                onOpen={(row) =>
-                  router.push(
-                    `/admin/families/${row.family_id}?yearId=${row.year_id}`
-                  )
-                }
+                // Opens the family's CURRENT stage page for the year
+                // (resolved by the route) — the application review,
+                // the registration page, or the enrolled student.
+                onOpen={(row) => router.push(stageHref(row.target))}
               />
             ))}
           </div>

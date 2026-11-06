@@ -48,6 +48,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { FamilyStageLink } from "@/components/admin/family-stage-link";
 import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone } from "@/lib/phone";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
@@ -485,8 +486,9 @@ function LeadConversionEditor({
           </PopoverContent>
         </Popover>
         {/* Jump to the family this lead became — the mirror of the
-            family page's "View inquiry" button. Icon-only so the
-            combobox stays the one substantive control on the row. */}
+            family page's "View inquiry" button, opening whichever
+            stage page the family is on now. Icon-only so the combobox
+            stays the one substantive control on the row. */}
         {linked ? (
           <Button
             asChild
@@ -495,10 +497,10 @@ function LeadConversionEditor({
             className="size-8 shrink-0 text-muted-foreground"
             title="Open this family"
           >
-            <a href={`/admin/families/${conversion.family_id}`}>
+            <FamilyStageLink familyId={conversion.family_id}>
               <ExternalLink className="size-3.5" />
               <span className="sr-only">Open this family</span>
-            </a>
+            </FamilyStageLink>
           </Button>
         ) : null}
       </div>

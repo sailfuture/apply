@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
+import { buildStageIndex, type StageTarget } from "@/lib/admin-stage";
 
 /**
  * Admin SUFS list — one row per active student for the requested
@@ -202,6 +203,23 @@ async function handleGET(req: NextRequest) {
       return startedFamilyIds.has(familyId);
     });
 
+    // Where each student's name link opens — their enrolled page once
+    // their packet is confirmed (or the family is), the registration
+    // page while accepted, else the application review. Same rule as
+    // the search box and the other lists (lib/admin-stage).
+    const stageIndex = buildStageIndex(
+      {
+        applyProgress: familyProgressRows,
+        regProgress: progressRows,
+        applications: apps.filter(
+          (a) => Number(a.registration_school_years_id) === yearId
+        ),
+        students,
+        packets,
+      },
+      { preferredYearId: yearId }
+    );
+
     const rows: SufsStudentRow[] = eligibleApps.map((app) => {
       const studentId = Number(app.registration_students_id);
       const familyId = Number(app.registration_families_id);
@@ -227,6 +245,9 @@ async function handleGET(req: NextRequest) {
         student_grade: app.current_grade ?? "",
         family_name: family?.family_name?.trim() || `Family #${familyId}`,
         stage: familyStage(familyId),
+        target:
+          stageIndex.student(studentId, yearId) ??
+          stageIndex.family(familyId, yearId),
         // 0 is the "not entered yet" sentinel the parent-facing award-ID
         // input writes, so normalize it to null for the UI rather than
         // rendering a literal "0".
@@ -355,6 +376,9 @@ export interface SufsStudentRow {
   /** Family's furthest pipeline stage for the year — the Status
    *  column (enrolled > registration > applying > in progress). */
   stage: "in_progress" | "application" | "registration" | "enrolled";
+  /** Where the student's name link opens — their stage page for the
+   *  year (`stageHref` in lib/admin-stage). */
+  target: StageTarget;
   /** Parent-entered 9-digit Step Up award ID. `null` when unset (the
    *  underlying column uses 0 as its empty sentinel). */
   sufs_award_id: number | null;

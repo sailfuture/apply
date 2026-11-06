@@ -249,6 +249,7 @@ export default function BusStopsPage() {
       {profileFamilyId != null ? (
         <FamilyProfileSheet
           familyId={profileFamilyId}
+          yearId={yearId}
           open
           onOpenChange={(o) => {
             if (!o) setProfileFamilyId(null);

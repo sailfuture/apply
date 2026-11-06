@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import useSWR from "swr";
 import { ExternalLink, Loader2, Mail, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ContactRow } from "@/components/admin/lead-triage";
+import { FamilyStageLink } from "@/components/admin/family-stage-link";
 import {
   Sheet,
   SheetContent,
@@ -20,8 +20,9 @@ import type { FamilyProfileResponse } from "@/app/api/admin/families/[id]/profil
  * Compact family profile in a sheet — who's in the household and how
  * to reach them, without leaving the page you're on (the Messages
  * inbox uses this for its "Family details" button). Links out to the
- * full family record for everything else (billing, docs, notes).
- * Lazy: nothing fetches until the sheet opens.
+ * family's CURRENT stage page for everything else (the application
+ * review, the registration page, or the enrolled student — resolved
+ * by `FamilyStageLink`). Lazy: nothing fetches until the sheet opens.
  */
 /** "9" and "9th" both live in the grade column — normalize bare
  *  numbers to the ordinal form for display. */
@@ -31,10 +32,14 @@ function formatGrade(grade: string): string {
 
 export function FamilyProfileSheet({
   familyId,
+  yearId,
   open,
   onOpenChange,
 }: {
   familyId: number;
+  /** The host page's working year — breaks ties between years the
+   *  family is equally far along in when resolving the record link. */
+  yearId?: number | string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -166,13 +171,14 @@ export function FamilyProfileSheet({
         </div>
 
         {/* Everything deeper (billing, docs, notes, registration) lives
-            on the full record — one explicit jump-off. */}
+            on the full record — one explicit jump-off, to whichever
+            stage page the family is on right now. */}
         <div className="border-t bg-muted/20 px-4 py-3">
           <Button asChild variant="outline" className="w-full bg-white">
-            <Link href={`/admin/families/${familyId}`}>
+            <FamilyStageLink familyId={familyId} yearId={yearId}>
               Open full family record
               <ExternalLink className="size-3.5 ml-1.5" />
-            </Link>
+            </FamilyStageLink>
           </Button>
         </div>
       </SheetContent>

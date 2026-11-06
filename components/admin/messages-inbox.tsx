@@ -1206,6 +1206,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
       {selected && selected.type === "family" ? (
         <FamilyProfileSheet
           familyId={selected.id}
+          yearId={yearId}
           open={profileOpen}
           onOpenChange={setProfileOpen}
         />

@@ -25,6 +25,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { stageHref, type StageTarget } from "@/lib/admin-stage";
 import { cn } from "@/lib/utils";
 
 interface AppProgressRow {
@@ -32,6 +33,9 @@ interface AppProgressRow {
   family_id: number;
   year_id: number;
   flow_type: "apply" | "reapply";
+  /** Where the family's name opens — its current stage page for the
+   *  year, resolved by the route (lib/admin-stage). */
+  target: StageTarget;
   family_name: string;
   primary_name: string;
   primary_email: string;
@@ -258,7 +262,9 @@ export default function ApplicationsPage() {
       sortable: true,
       searchable: true,
       width: showOther ? "w-[20%]" : "w-[22%]",
-      // Name click = full application page; the ROW click opens the
+      // Name click = the family's CURRENT stage page (this application
+      // while they apply, the registration page once accepted, the
+      // enrolled student once confirmed); the ROW click opens the
       // activity sheet, so this stops propagation.
       render: (row) => (
         <button
@@ -266,9 +272,7 @@ export default function ApplicationsPage() {
           className="block max-w-full truncate text-left font-medium hover:underline"
           onClick={(e) => {
             e.stopPropagation();
-            router.push(
-              `/admin/families/${row.family_id}?yearId=${row.year_id}`
-            );
+            router.push(stageHref(row.target));
           }}
         >
           {row.family_name}

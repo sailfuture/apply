@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   CircleHelp,
@@ -14,6 +14,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { useWorkingYearId } from "@/lib/admin-year-memory";
+import { stageHref, type StageTarget } from "@/lib/admin-stage";
 import type {
   AdminSearchIndex,
   SearchStage,
@@ -32,12 +34,16 @@ import type {
  * they in the funnel" answer without clicking through. Students who
  * were unenrolled mid-year badge "Unenrolled" instead.
  *
- * Navigation targets: families → family detail; parents → their
- * family's detail; enrolled students → the enrolled student detail
- * (needs a year in context), everyone else → their family detail;
- * inquiries → the All Leads queue. The current `?yearId=` is
- * propagated so the destination pages keep the year picker's
- * context.
+ * Navigation targets: every student, parent and family result opens
+ * the family's (or the student's) CURRENT stage page, resolved by the
+ * index route with the shared `lib/admin-stage` rule — the
+ * application review while applying, the registration page once
+ * accepted, the enrolled student page once enrolled (a family with
+ * several enrolled students opens its overview). The badge and the
+ * link always agree because both come from that one target.
+ * Inquiries → the All Leads queue on the working year. The working
+ * year also rides to the index route, which uses it to break ties
+ * between years a family is equally far along in.
  */
 
 interface ResultItem {
@@ -79,10 +85,19 @@ const BADGES: Record<BadgeKind, { label: string; className: string }> = {
 
 const GROUP_LIMIT = 6;
 
+/** Badge for a resolved target — the stage, or "Unenrolled" for a
+ *  student who left (their link still opens their own page). */
+function badgeFor(target: StageTarget): BadgeKind {
+  return target.unenrolled ? "unenrolled" : target.stage;
+}
+
 export function DashboardSearch() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const yearId = searchParams.get("yearId");
+  // The admin's working year (the top bar's) — on a family record
+  // the URL's year is that application's, not the working one.
+  const yearId = useWorkingYearId(pathname, searchParams.get("yearId"));
 
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -94,7 +109,9 @@ export function DashboardSearch() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { data, isLoading } = useSWR<AdminSearchIndex>(
-    armed ? "/api/admin/search" : null,
+    armed
+      ? `/api/admin/search${yearId ? `?yearId=${yearId}` : ""}`
+      : null,
     adminFetcher,
     { revalidateOnFocus: false }
   );
@@ -136,16 +153,10 @@ export function DashboardSearch() {
         kind: "student",
         title: s.name,
         subtitle: s.family_name,
-        badge: s.is_archived ? "unenrolled" : s.stage,
-        // The enrolled detail page needs a year in context; without
-        // one (or for non-enrolled students) the family page is the
-        // best landing spot.
-        href:
-          s.is_enrolled && yearId
-            ? withYear(`/admin/enrolled/${s.id}`)
-            : s.family_id
-              ? withYear(`/admin/families/${s.family_id}`)
-              : withYear(`/admin/enrolled/${s.id}`),
+        badge: s.target ? badgeFor(s.target) : "application",
+        // A student with no family (bad data) has no stage page; their
+        // own page is the only place that can show them.
+        href: s.target ? stageHref(s.target) : `/admin/enrolled/${s.id}`,
       }));
 
     const parents = data.parents
@@ -161,10 +172,8 @@ export function DashboardSearch() {
         kind: "parent",
         title: p.name,
         subtitle: [p.email, p.family_name].filter(Boolean).join(" · "),
-        badge: p.stage,
-        href: p.family_id
-          ? withYear(`/admin/families/${p.family_id}`)
-          : "#",
+        badge: p.target ? badgeFor(p.target) : "application",
+        href: p.target ? stageHref(p.target) : "#",
       }))
       .filter((p) => p.href !== "#");
 
@@ -178,8 +187,8 @@ export function DashboardSearch() {
         kind: "family",
         title: f.name,
         subtitle: f.student_names,
-        badge: f.stage,
-        href: withYear(`/admin/families/${f.id}`),
+        badge: badgeFor(f.target),
+        href: stageHref(f.target),
       }));
 
     const inquiries = (data.inquiries ?? [])

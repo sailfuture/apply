@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { buildStageIndex, type StageTarget } from "@/lib/admin-stage";
 import { xano } from "@/lib/xano";
 
 /**
@@ -64,6 +65,7 @@ async function handleGET(req: NextRequest) {
       parentsResult,
       progressResult,
       familyProgressResult,
+      packetsResult,
     ] = await Promise.allSettled([
       xano.applications.getByYear(yearId),
       xano.students.getAll(),
@@ -71,6 +73,10 @@ async function handleGET(req: NextRequest) {
       xano.parents.getAll(),
       xano.studentRegistrationProgress.getByYear(yearId),
       xano.familyApplicationProgress.getByYear(yearId),
+      // Per-student packets for the year — a confirmed packet makes
+      // that student enrolled even without the family latch
+      // (residential placements), which decides each row's link.
+      xano.studentRegistration.getByYear(yearId),
     ]);
 
     if (appsResult.status === "rejected") {
@@ -109,6 +115,12 @@ async function handleGET(req: NextRequest) {
         familyProgressResult.reason
       );
     }
+    if (packetsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/registrations] failed to load registration packets:",
+        packetsResult.reason
+      );
+    }
 
     const apps =
       appsResult.status === "fulfilled" ? appsResult.value : [];
@@ -124,9 +136,28 @@ async function handleGET(req: NextRequest) {
       familyProgressResult.status === "fulfilled"
         ? familyProgressResult.value
         : [];
+    const packets =
+      packetsResult.status === "fulfilled" ? packetsResult.value : [];
 
     const studentById = new Map(students.map((s) => [s.id, s]));
     const familyById = new Map(families.map((f) => [f.id, f]));
+
+    // Where each row's name link opens — this registration while the
+    // family is registering, the enrolled student (or the family
+    // overview) once confirmed. Shared rule with the search box and
+    // the other lists (lib/admin-stage).
+    const stageIndex = buildStageIndex(
+      {
+        applyProgress: familyProgressRows,
+        regProgress: progressRows,
+        applications: apps.filter(
+          (a) => Number(a.registration_school_years_id) === yearId
+        ),
+        students,
+        packets,
+      },
+      { preferredYearId: yearId }
+    );
 
     // Primary parent per family — lowest id wins, mirroring how the
     // Applications endpoint picks one for display.
@@ -225,6 +256,10 @@ async function handleGET(req: NextRequest) {
         student_id: studentId,
         family_id: familyId,
         year_id: yearId,
+        target:
+          stageIndex.student(studentId, yearId) ??
+          stageIndex.family(familyId, yearId),
+        family_target: stageIndex.family(familyId, yearId),
         student_first_name: student?.first_name ?? "",
         student_last_name: student?.last_name ?? "",
         student_full_name: student
@@ -308,6 +343,13 @@ export interface RegistrationStudentRow {
   student_id: number;
   family_id: number;
   year_id: number;
+  /** Where this student's link opens — their enrolled page once
+   *  confirmed, else the family's stage page (`stageHref`). */
+  target: StageTarget;
+  /** Where the family's link opens for the year: this registration,
+   *  or the enrolled student / family overview once confirmed. The
+   *  page folds student rows into family rows and links with this. */
+  family_target: StageTarget;
   student_first_name: string;
   student_last_name: string;
   student_full_name: string;
