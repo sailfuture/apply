@@ -2,6 +2,10 @@ import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import {
+  isStudentAccountAddress,
+  studentSchoolEmailSet,
+} from "@/lib/student-accounts";
 
 /**
  * Admin families list — single round trip via the Xano
@@ -32,6 +36,9 @@ async function handleGET(req: NextRequest) {
         `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
       ])
     );
+    // Every stored student school email, for the student-account flag
+    // below (roster half of the rule in lib/student-accounts.ts).
+    const studentSchoolEmails = studentSchoolEmailSet(students);
 
     const rows = families.map((family) => {
       // Apps for the year (or all of them if no year filter). Each app
@@ -63,6 +70,14 @@ async function handleGET(req: NextRequest) {
         // nothing consumed it. Family lifecycle comes from the
         // `family_application_progress` row where it's needed.
         primary_email: family.registration_parents_id[0]?.email ?? "",
+        // The sign-in address is a student's school account (a stored
+        // `school_email` or first.lastYY@sailfuture.org). The dashboard's
+        // "Sign-ups without students" card badges these: they are the
+        // sign-ups the student-account guard now turns away at the door.
+        primary_is_student_account: isStudentAccountAddress(
+          family.registration_parents_id[0]?.email,
+          studentSchoolEmails
+        ),
         primary_name: family.registration_parents_id[0]
           ? `${family.registration_parents_id[0].first_name} ${family.registration_parents_id[0].last_name}`.trim()
           : "",

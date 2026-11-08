@@ -21,6 +21,10 @@ import {
 import { LoadingScreen } from "@/components/loading-screen";
 import { SmsConsentFields } from "@/components/sms-consent-fields";
 import { StateSelect } from "@/components/state-select";
+import {
+  STUDENT_ACCOUNT_ERROR_CODE,
+  STUDENT_ACCOUNT_PATH,
+} from "@/lib/student-accounts";
 
 /**
  * First-time onboarding for a new family. We capture the primary parent /
@@ -58,6 +62,16 @@ export default function WelcomePage() {
     async function bootstrap() {
       try {
         const familyRes = await fetch("/api/families");
+        // A student's school account gets a 403 with
+        // `code: "student_account"` — it must never create a family, so
+        // hand it to the explanation page instead of the form.
+        if (familyRes.status === 403) {
+          const body = await familyRes.json().catch(() => null);
+          if (body?.code === STUDENT_ACCOUNT_ERROR_CODE) {
+            router.replace(STUDENT_ACCOUNT_PATH);
+            return;
+          }
+        }
         if (familyRes.ok) {
           const data = await familyRes.json();
           if (data?.id) {

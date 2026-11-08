@@ -1,9 +1,10 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
-import { xano, ensureParentRecord } from "@/lib/xano";
+import { xano, ensureParentRecord, isStudentAccountEmail } from "@/lib/xano";
 import { smsConsentParentFields } from "@/lib/sms/consent";
 import { familyNameWithStudents } from "@/lib/family-name";
+import { studentAccountErrorBody } from "@/lib/student-accounts";
 
 async function resolveParents(family: ReturnType<typeof xano.families.getById> extends Promise<infer T> ? T : never) {
   const embedded = xano.families.getEmbeddedParents(family);
@@ -40,6 +41,16 @@ export async function POST(req: NextRequest) {
   const user = await currentUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // A student's school account never gets a family. The `/` resolver
+  // already sends them to /student-account; this covers a direct POST.
+  // See lib/student-accounts.ts for the rule.
+  const primaryEmail = user.primaryEmailAddress?.emailAddress;
+  if (await isStudentAccountEmail(primaryEmail)) {
+    return NextResponse.json(studentAccountErrorBody(primaryEmail), {
+      status: 403,
+    });
   }
 
   const familyId = user.publicMetadata.registration_families_id as
@@ -194,6 +205,18 @@ export async function GET() {
         { status: 503 }
       );
     }
+  }
+
+  // No family on the token or metadata — the one path that pays for a
+  // `currentUser()` round trip: a student's school account gets a 403
+  // with `code: "student_account"` so the welcome page sends it to
+  // /student-account instead of offering the create-a-family form.
+  const user = await currentUser();
+  const primaryEmail = user?.primaryEmailAddress?.emailAddress;
+  if (await isStudentAccountEmail(primaryEmail)) {
+    return NextResponse.json(studentAccountErrorBody(primaryEmail), {
+      status: 403,
+    });
   }
 
   const parent = await xano.parents.findByClerkId(userId);

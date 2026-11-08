@@ -1,8 +1,9 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { xano, ensureParentRecord } from "@/lib/xano";
+import { xano, ensureParentRecord, isStudentAccountEmail } from "@/lib/xano";
 import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
 import { getAdminForEmail } from "@/lib/admin-auth";
+import { STUDENT_ACCOUNT_PATH } from "@/lib/student-accounts";
 import {
   emailFromClaims,
   familyIdFromClaims,
@@ -33,6 +34,9 @@ import {
  * Resolution order (first match wins):
  *   1. Not signed in            → /sign-in
  *   2. Email matches admin list → /admin
+ *   2b. Primary email is a student's school account (a stored
+ *       `school_email` or first.lastYY@sailfuture.org)
+ *                              → /student-account, nothing created
  *   3. No parent record / no family → /welcome
  *   4. No upcoming or active year → / (renders nothing — degenerate state)
  *   5. Family has at least one student `registrationConfirmed` for the
@@ -65,6 +69,13 @@ export default async function Page() {
 
   if (claimEmail && claimFamilyId) {
     if (await getAdminForEmail(claimEmail)) redirect("/admin");
+    // A student account that already has a family stamped (the
+    // student-made duplicate of 2026-09-18) is still turned away. Free
+    // for parents — only school-domain addresses are tested at all. See
+    // lib/student-accounts.ts.
+    if (await isStudentAccountEmail(claimEmail)) {
+      redirect(STUDENT_ACCOUNT_PATH);
+    }
     familyId = claimFamilyId;
   } else {
     const user = await currentUser();
@@ -77,6 +88,15 @@ export default async function Page() {
       if (!e.emailAddress) continue;
       const matched = await getAdminForEmail(e.emailAddress);
       if (matched) redirect("/admin");
+    }
+
+    // Step 1b — a student signing in with their school Google account
+    // is never a parent. Stop here, before `ensureParentRecord` mints a
+    // parent row and /welcome mints a family for them — which is how
+    // the student-made "Edward Roberts" duplicate (family 126) came to
+    // exist. See lib/student-accounts.ts for the rule.
+    if (await isStudentAccountEmail(user.primaryEmailAddress?.emailAddress)) {
+      redirect(STUDENT_ACCOUNT_PATH);
     }
 
     // Step 2 — make sure the family record is resolved + cached on Clerk

@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { StatsCard } from "@/components/admin/stats-card";
 import { DashboardSearch } from "@/components/admin/dashboard-search";
 import { DashboardYearApplications } from "@/components/admin/dashboard-year-applications";
+import { OrphanSignupsCard } from "@/components/admin/dashboard-orphan-signups";
 import { LeadSheet } from "@/components/admin/lead-sheet";
 import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import {
@@ -422,6 +423,12 @@ export default function AdminDashboardPage() {
           ) : null}
         </TrendCard>
       </div>
+
+      {/* Families that signed up but never added a student — a stalled
+          applicant to nudge, or a stray account to delete. Badged when
+          the sign-in address is a student's school account, the case
+          the /student-account guard now stops at the door. */}
+      <OrphanSignupsCard />
 
       {/* Latest inquiry submissions with when they landed — the "who
           just reached out" glance. Rows open the shared triage sheet. */}

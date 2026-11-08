@@ -1,6 +1,13 @@
 import { getDocumentDownloadUrl as pandaDocDownloadUrl } from "@/lib/pandadoc";
 import { xanoFetch } from "@/lib/xano-fetch";
 import type { RecruitmentEventInput } from "@/lib/recruitment-events";
+import {
+  isOnStudentAccountDomain,
+  isStudentAccountAddress,
+  matchesStudentAccountPattern,
+  StudentAccountError,
+  studentSchoolEmailSet,
+} from "@/lib/student-accounts";
 
 const BASE_URL = process.env.XANO_API_BASE_URL;
 
@@ -2655,6 +2662,34 @@ function mergeProgressFields<T extends Record<string, unknown>>(
   return result as Partial<T>;
 }
 
+/**
+ * Is this address a student's school account? School domain AND
+ * (minted `first.lastYY@sailfuture.org` pattern OR a stored
+ * `registration_students.school_email`). A parent on any other domain
+ * answers false without touching Xano, and the roster is fetched only
+ * when the pattern didn't already decide — i.e. for staff-shaped work
+ * addresses, which are rare on this path. A roster fetch failure
+ * answers false: locking a staff parent out during a Xano blip is
+ * worse than one more junk row an admin can delete. The rule itself
+ * is documented in lib/student-accounts.ts.
+ */
+export async function isStudentAccountEmail(
+  email: string | null | undefined
+): Promise<boolean> {
+  if (!isOnStudentAccountDomain(email)) return false;
+  if (matchesStudentAccountPattern(email)) return true;
+  try {
+    const students = await xano.students.getAll();
+    return isStudentAccountAddress(email, studentSchoolEmailSet(students));
+  } catch (err) {
+    console.warn(
+      "[student-accounts] roster lookup failed; treating address as a parent:",
+      err
+    );
+    return false;
+  }
+}
+
 export function ensureParentRecord(
   clerkUserId: string,
   clerkUser: {
@@ -2686,6 +2721,12 @@ async function _doEnsureParentRecord(
   const email = clerkUser.primaryEmailAddress?.emailAddress ?? "";
   const rawPhone = clerkUser.primaryPhoneNumber?.phoneNumber ?? "";
   const cleanPhone = rawPhone.replace(/\D/g, "");
+
+  // Hard stop: a student's school account never holds a parent row,
+  // whatever the caller forgot to check. The `/` resolver and
+  // `/api/families` turn these away earlier with a redirect / 403;
+  // this is the last line. See lib/student-accounts.ts.
+  if (await isStudentAccountEmail(email)) throw new StudentAccountError(email);
 
   const existing = await xano.parents.findByClerkId(clerkUserId);
   if (existing) {

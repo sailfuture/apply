@@ -1,6 +1,6 @@
 import { verifyWebhook } from "@clerk/nextjs/webhooks";
 import { NextRequest } from "next/server";
-import { xano } from "@/lib/xano";
+import { xano, isStudentAccountEmail } from "@/lib/xano";
 
 function cleanPhone(raw: string): string {
   return raw.replace(/\D/g, "");
@@ -25,6 +25,17 @@ export async function POST(req: NextRequest) {
           (p) => p.id === evt.data.primary_phone_number_id
         )?.phone_number ?? ""
       );
+
+      // A student's school account never gets a parent row — the `/`
+      // resolver turns it away at /student-account and
+      // `ensureParentRecord` refuses it. Log the attempt so the sign-up
+      // shows in the function logs, then stop.
+      if (await isStudentAccountEmail(primaryEmail)) {
+        console.warn(
+          `Student account ${primaryEmail} signed up as Clerk user ${id}; no parent row will be created`
+        );
+        return new Response("Webhook received", { status: 200 });
+      }
 
       const existingParent = await xano.parents.findByEmail(primaryEmail);
 
