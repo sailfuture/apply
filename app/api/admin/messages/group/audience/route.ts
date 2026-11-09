@@ -90,6 +90,17 @@ export async function GET(req: NextRequest) {
         `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
       ])
     );
+    // Unenrolled students (Unenroll modal sets `isArchived`) drop out
+    // of the audience: their name/grade/crew/stop don't list on the
+    // family row, and a family whose every student for the year is
+    // unenrolled isn't listed at all — the family-level "confirmed"
+    // flag stays true after a student leaves, so stage alone can't
+    // tell. The single-message thread history still reaches them.
+    const archivedStudents = new Set(
+      students.filter((s) => s.isArchived === true).map((s) => s.id)
+    );
+    const familiesWithActiveStudent = new Set<number>();
+    const familiesWithArchivedStudent = new Set<number>();
     // Admin-set packet placement (grade_level) wins over the
     // application's incoming grade — it's the grade the Enrolled
     // roster shows, so the composer's grade chips match that page.
@@ -121,6 +132,11 @@ export async function GET(req: NextRequest) {
       const fid = Number(a.registration_families_id);
       const sid = Number(a.registration_students_id);
       if (!fid || !sid) continue;
+      if (archivedStudents.has(sid)) {
+        familiesWithArchivedStudent.add(fid);
+        continue;
+      }
+      familiesWithActiveStudent.add(fid);
       const list = familyStudents.get(fid) ?? [];
       // Bus election lives on the application row; the stop is
       // stored by NAME. Only bus riders carry one.
@@ -168,6 +184,12 @@ export async function GET(req: NextRequest) {
     for (const fam of families) {
       const stage = familyStage(fam.id);
       if (!stage) continue;
+      if (
+        familiesWithArchivedStudent.has(fam.id) &&
+        !familiesWithActiveStudent.has(fam.id)
+      ) {
+        continue;
+      }
       const parent = pickAccountHolderParent(fam.registration_parents_id);
       const e164 = toE164(parent?.phone ?? null);
       const optedOut = Boolean(parent?.sms_opted_out_at);
