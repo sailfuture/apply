@@ -55,6 +55,7 @@ import { GooglePhotoSyncDialog } from "@/components/admin/google-photo-sync-dial
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { ToddleSyncAllDialog } from "@/components/admin/toddle-sync-all-dialog";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Order grades in the natural school sequence rather than
@@ -70,7 +71,7 @@ import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
  *  never disagree about what "currently shown" means. */
 function matchesEnrolledSearch(r: EnrolledStudentRow, q: string): boolean {
   return `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level} ${r.crew_assignment ?? ""} ${r.enrolled_year_name ?? ""}`
-    .toLowerCase()
+    .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
     .includes(q);
 }
 
@@ -252,7 +253,7 @@ export default function EnrolledStudentsPage() {
   // clicks. Unenrolled students are deliberately excluded.
   const [downloadingIeps, setDownloadingIeps] = useState(false);
   const iepCandidates = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return enrolledRows.filter(
       (r) => r.has_iep && (!q || matchesEnrolledSearch(r, q))
     );
@@ -308,7 +309,7 @@ export default function EnrolledStudentsPage() {
   // account generated (the rest need "Create Student Emails" first).
   const [printingLogins, setPrintingLogins] = useState(false);
   const loginCandidates = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return enrolledRows.filter(
       (r) => r.has_school_account && (!q || matchesEnrolledSearch(r, q))
     );
@@ -316,7 +317,7 @@ export default function EnrolledStudentsPage() {
   // Shown students still missing an account — drives the button's
   // hover text so a short stack is explained before it prints.
   const missingLoginCount = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return enrolledRows.filter(
       (r) => !r.has_school_account && (!q || matchesEnrolledSearch(r, q))
     ).length;
@@ -328,7 +329,7 @@ export default function EnrolledStudentsPage() {
   // trigger so "when did we last sync?" is answerable without running
   // one.
   const toddleFreshness = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     const shown = enrolledRows.filter(
       (r) => !q || matchesEnrolledSearch(r, q)
     );
@@ -960,7 +961,7 @@ function EnrolledRoster({
   // grade + crew + cohort year — the same fields admin's eye scans
   // when looking for a specific row.
   const visibleGrouped = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return grouped;
     return grouped
       .map((g) => ({

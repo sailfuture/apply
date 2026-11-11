@@ -42,6 +42,7 @@ import type {
   AdminEvent,
   AdminEventsResponse,
 } from "@/app/api/admin/events/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 type View = "all" | "upcoming" | "past";
 
@@ -128,7 +129,7 @@ export default function AdminEventsPage() {
   // Search and the sign-ups toggle narrow first, so the view buttons
   // count what they'd actually show.
   const narrowed = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return events.filter((e) => {
       if (signupsOnly && !hasSignups(e)) return false;
       if (!q) return true;
@@ -140,7 +141,7 @@ export default function AdminEventsPage() {
         ...e.signups.flatMap((s) => [s.family_name, ...s.parents]),
       ]
         .join(" ")
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q);
     });
   }, [events, query, signupsOnly]);

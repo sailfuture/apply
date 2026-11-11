@@ -21,6 +21,7 @@ import type {
   GroupContact,
   GroupStage,
 } from "@/app/api/admin/messages/group/audience/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 interface PickedContact {
   /** Directory types, plus `adhoc` when staff typed a bare number —
@@ -98,7 +99,7 @@ export function NewMessageDialog({
   const [gradeFilter, setGradeFilter] = useState<number[]>([]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return contacts.filter((c) => {
       // Faculty only list when asked for (chip or a search) — a
       // select-all on a parent blast must never sweep in staff.
@@ -120,7 +121,7 @@ export function NewMessageDialog({
       }
       if (!q) return true;
       return `${c.name} ${c.personName} ${c.students}`
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q);
     });
   }, [contacts, search, stageFilter, gradeFilter]);

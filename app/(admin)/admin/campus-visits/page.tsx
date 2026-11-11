@@ -30,6 +30,7 @@ import {
   downloadCampusVisitsCsv,
 } from "@/lib/campus-visits-export";
 import type { CampusVisitRow } from "@/app/api/admin/campus-visits/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Campus Visits — the database of liability waivers signed on the
@@ -79,11 +80,11 @@ export default function CampusVisitsPage() {
   // the user had already filtered away.
   const [search, setSearch] = useState("");
   const exportRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return visible;
     return visible.filter((r) =>
       [r.parent_name, r.parent_email, r.parent_phone, r.student_name, r.student_school]
-        .some((v) => (v ?? "").toLowerCase().includes(q))
+        .some((v) => (v ?? "").toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q))
     );
   }, [visible, search]);
 

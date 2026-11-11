@@ -54,6 +54,7 @@ import type {
   NotStartedRow,
 } from "@/app/api/admin/billing/route";
 import { exportBillingXlsx } from "@/lib/billing-export";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Admin Billing list — every family with a Stripe subscription on
@@ -735,11 +736,11 @@ function BillingTable({
 }) {
   const [search, setSearch] = useState("");
   const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return rows;
     return rows.filter((r) =>
       `${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""}`
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q)
     );
   }, [rows, search]);

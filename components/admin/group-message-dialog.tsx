@@ -60,6 +60,7 @@ import type {
   GroupContact,
   GroupStage,
 } from "@/app/api/admin/messages/group/audience/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 interface SchoolYear {
   id: number;
@@ -359,7 +360,7 @@ export function GroupMessageDialog({
   );
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return contacts.filter((c) => {
       // Faculty only list when asked for (chip or a search) — a
       // select-all on a parent blast must never sweep in staff.
@@ -395,9 +396,9 @@ export function GroupMessageDialog({
       if (minRating > 0 && (c.rating ?? 0) < minRating) return false;
       if (!q) return true;
       return (
-        c.name.toLowerCase().includes(q) ||
-        c.personName.toLowerCase().includes(q) ||
-        c.students.toLowerCase().includes(q) ||
+        c.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+        c.personName.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+        c.students.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
         // Stage words work in search too — "enrolled", "applicants",
         // "camp"… narrow to that stage.
         matchesStageAlias(c.stage, q)

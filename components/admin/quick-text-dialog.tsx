@@ -32,6 +32,7 @@ import type {
   GroupAudienceResponse,
   GroupContact,
 } from "@/app/api/admin/messages/group/audience/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Quick group text to a FIXED set of families — the "message this bus
@@ -113,12 +114,12 @@ export function QuickTextDialog({
   );
 
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return q
       ? rows.filter(
           (r) =>
-            r.name.toLowerCase().includes(q) ||
-            r.personName.toLowerCase().includes(q)
+            r.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+            r.personName.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q)
         )
       : rows;
   }, [rows, query]);

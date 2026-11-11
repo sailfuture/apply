@@ -30,6 +30,7 @@ import type {
   AdminEventSignup,
 } from "@/app/api/admin/events/route";
 import type { EventFamiliesResponse } from "@/app/api/admin/events/families/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /** A typed quantity box → a count; blank reads as 0. NaN when it
  *  isn't a whole number, so validation can flag it. */
@@ -92,13 +93,13 @@ export function EventRsvpDialog({
     [event.signups]
   );
   const candidates = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return (familyData?.families ?? [])
       .filter((f) => !signedUp.has(f.id))
       .filter(
         (f) =>
           !q ||
-          [f.name, ...f.parents, f.students].join(" ").toLowerCase().includes(q)
+          [f.name, ...f.parents, f.students].join(" ").toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q)
       );
   }, [familyData, signedUp, query]);
   const familyName = adding

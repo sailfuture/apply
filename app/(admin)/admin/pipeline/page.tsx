@@ -27,6 +27,7 @@ import type {
   PipelineFamilyRow,
   PipelineStage,
 } from "@/app/api/admin/pipeline/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Admissions Pipeline — every family in the funnel for the selected
@@ -311,12 +312,12 @@ export default function PipelinePage() {
 
   const visible = useMemo(() => {
     const active = rows.filter((r) => !r.is_archived);
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return active;
     return active.filter((r) =>
       [r.family_name, r.student_names, r.primary_name, r.primary_email]
         .join(" ")
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q)
     );
   }, [rows, search]);

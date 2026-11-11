@@ -35,6 +35,7 @@ import type {
   AdminLaptopDevice,
   AdminLaptopsResponse,
 } from "@/app/api/admin/laptops/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Laptop inventory — the management surface for the school's device
@@ -69,7 +70,7 @@ export default function AdminLaptopsPage() {
   } | null>(null);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return laptops;
     return laptops.filter((l) =>
       [
@@ -80,7 +81,7 @@ export default function AdminLaptopsPage() {
         ...l.rfid_uid,
       ]
         .join(" ")
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q)
     );
   }, [laptops, query]);

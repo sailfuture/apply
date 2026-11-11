@@ -31,6 +31,7 @@ import type {
   VolunteerRecapPreviewResponse,
   VolunteerRecapSendResponse,
 } from "@/app/api/admin/volunteer-hours/recap/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 function formatHours(value: number): string {
   if (!Number.isFinite(value)) return "0";
@@ -83,12 +84,12 @@ export function VolunteerRecapDialog({
   const selected = picked ?? sendableIds;
   const [query, setQuery] = useState("");
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return q
       ? rows.filter(
           (f) =>
-            f.name.toLowerCase().includes(q) ||
-            f.students.toLowerCase().includes(q)
+            f.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+            f.students.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q)
         )
       : rows;
   }, [rows, query]);

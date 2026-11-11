@@ -53,6 +53,7 @@ import type {
   GroupAudienceResponse,
   GroupContact,
 } from "@/app/api/admin/messages/group/audience/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * The shared two-pane SMS inbox behind BOTH messaging pages (user
@@ -419,14 +420,14 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
         );
       }
     }
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return list;
     const qDigits = q.replace(/\D/g, "");
     return list.filter(
       (c) =>
-        c.name.toLowerCase().includes(q) ||
+        c.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
         (c.searchText ?? "").includes(q) ||
-        c.lastBody.toLowerCase().includes(q) ||
+        c.lastBody.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
         (qDigits.length >= 3 && c.phone.includes(qDigits))
     );
   }, [

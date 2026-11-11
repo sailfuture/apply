@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 export interface ColumnDef<T> {
   key: string;
@@ -122,13 +123,13 @@ export function DataTable<T extends Record<string, unknown>>({
 
   const filtered = useMemo(() => {
     if (!search.trim()) return safeData;
-    const q = search.toLowerCase();
+    const q = search.toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return safeData.filter((row) =>
       searchableKeys.some((col) => {
         const val = col.accessor
           ? col.accessor(row)
           : (row[col.key] as string | number | null | undefined);
-        return val != null && String(val).toLowerCase().includes(q);
+        return val != null && String(val).toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q);
       })
     );
   }, [safeData, search, searchableKeys]);

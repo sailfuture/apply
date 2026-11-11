@@ -83,6 +83,7 @@ import type {
 import type { ToursResponse } from "@/app/api/admin/tours/route";
 import type { TourSyncResult } from "@/app/api/admin/tours/sync/route";
 import { cn } from "@/lib/utils";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /** Short label per lead source — the Lead column's vocabulary. */
 const LEAD_LABEL: Record<LeadNoteSource, string> = {
@@ -989,16 +990,16 @@ function LeadPickerDialog({
     if (open) setQuery(seed ?? "");
   }
 
-  const q = query.trim().toLowerCase();
+  const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
   const qDigits = q.replace(/\D/g, "");
   const matches = (leads ?? [])
     .filter((l) => {
       if (!q) return true;
       return (
-        l.parent_name.toLowerCase().includes(q) ||
-        l.student_name.toLowerCase().includes(q) ||
-        l.email.toLowerCase().includes(q) ||
-        l.school.toLowerCase().includes(q) ||
+        l.parent_name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+        l.student_name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+        l.email.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+        l.school.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
         (qDigits.length >= 3 && l.phone.replace(/\D/g, "").includes(qDigits))
       );
     })

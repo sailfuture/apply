@@ -20,6 +20,7 @@ import type {
   AdminSearchIndex,
   SearchStage,
 } from "@/app/api/admin/search/route";
+import { foldSearch } from "@/lib/search-text";
 
 /**
  * Dashboard quick search — one box that finds any student, parent,
@@ -132,7 +133,7 @@ export function DashboardSearch() {
 
   const results = useMemo<ResultItem[]>(() => {
     if (!data) return [];
-    const q = query.trim().toLowerCase();
+    const q = foldSearch(query.trim());
     if (q.length < 2) return [];
     // Every whitespace token must match somewhere in the haystack, so
     // "hunter thom" finds Hunter Thompson. Phone queries match on
@@ -145,7 +146,8 @@ export function DashboardSearch() {
 
     const students = data.students
       .filter((s) =>
-        matches(`${s.name} ${s.family_name}`.toLowerCase())
+        matches(
+          foldSearch(`${s.name} ${s.family_name}`))
       )
       .slice(0, GROUP_LIMIT)
       .map<ResultItem>((s) => ({
@@ -162,7 +164,7 @@ export function DashboardSearch() {
     const parents = data.parents
       .filter((p) =>
         matches(
-          `${p.name} ${p.email} ${p.family_name}`.toLowerCase(),
+          foldSearch(`${p.name} ${p.email} ${p.family_name}`),
           p.phone.replace(/\D/g, "")
         )
       )
@@ -179,7 +181,8 @@ export function DashboardSearch() {
 
     const families = data.families
       .filter((f) =>
-        matches(`${f.name} ${f.student_names}`.toLowerCase())
+        matches(
+          foldSearch(`${f.name} ${f.student_names}`))
       )
       .slice(0, GROUP_LIMIT)
       .map<ResultItem>((f) => ({
@@ -194,7 +197,7 @@ export function DashboardSearch() {
     const inquiries = (data.inquiries ?? [])
       .filter((i) =>
         matches(
-          `${i.name} ${i.student_name} ${i.email}`.toLowerCase(),
+          foldSearch(`${i.name} ${i.student_name} ${i.email}`),
           i.phone.replace(/\D/g, "")
         )
       )

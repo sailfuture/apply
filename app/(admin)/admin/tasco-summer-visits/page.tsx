@@ -36,6 +36,7 @@ import {
   downloadTascoSummerVisitsCsv,
 } from "@/lib/tasco-summer-visits-export";
 import type { TascoSummerVisitRow } from "@/app/api/admin/tasco-summer-visits/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * TASCO Summer Visits — recruitment leads captured at St. Pete
@@ -82,7 +83,7 @@ export default function TascoSummerVisitsPage() {
   // the `searchable` columns below so the counts always agree.
   const [search, setSearch] = useState("");
   const exportRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return visible;
     return visible.filter((r) =>
       [
@@ -91,7 +92,7 @@ export default function TascoSummerVisitsPage() {
         r.recreation_center,
         r.parent_email,
         r.parent_phone,
-      ].some((v) => (v ?? "").toLowerCase().includes(q))
+      ].some((v) => (v ?? "").toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q))
     );
   }, [visible, search]);
 

@@ -42,6 +42,7 @@ import {
   recruitmentTimeLabel,
 } from "@/components/admin/recruitment-event-detail-sheet";
 import type { AdminRecruitmentEventsResponse } from "@/app/api/admin/recruitment-events/route";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 type View = "upcoming" | "past" | "all";
 
@@ -136,14 +137,14 @@ export default function AdminRecruitmentEventsPage() {
   // Search and the staff filter narrow first, so the view buttons
   // count what they'd actually show.
   const narrowed = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     const who = staffFilter === ALL_STAFF ? "" : staffFilter.toLowerCase();
     return events.filter((e) => {
       if (who && !e.staff.some((n) => n.toLowerCase() === who)) return false;
       if (!q) return true;
       return [e.name, e.location, e.description, ...e.staff]
         .join(" ")
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q);
     });
   }, [events, query, staffFilter]);

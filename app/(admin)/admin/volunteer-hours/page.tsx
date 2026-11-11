@@ -84,6 +84,7 @@ import type {
   VolunteerFamily,
 } from "@/app/api/admin/volunteer-hours/route";
 import type { XanoVolunteerHours } from "@/lib/xano";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /** Annual goal — in lockstep with the parent dashboard's constant so
  *  both surfaces show the same target. */
@@ -262,12 +263,12 @@ export default function AdminVolunteerHoursPage() {
   // full-name list the API already builds for the crediting dialogs.
   const [familyQuery, setFamilyQuery] = useState("");
   const visibleFamilyRows = useMemo(() => {
-    const q = familyQuery.trim().toLowerCase();
+    const q = familyQuery.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return familyRows;
     return familyRows.filter(
       ({ family }) =>
-        family.name.toLowerCase().includes(q) ||
-        family.students.toLowerCase().includes(q)
+        family.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+        family.students.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q)
     );
   }, [familyRows, familyQuery]);
 
@@ -1512,16 +1513,16 @@ function AttendeesDialog({
     [eventEntries]
   );
   const candidates = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return families
       .filter((f) => f.enrolled && !creditedIds.has(f.id))
       .filter(
         (f) =>
           !q ||
-          f.name.toLowerCase().includes(q) ||
+          f.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
           // Students match too — "searching for a student" should
           // find their family, not just the family name.
-          f.students.toLowerCase().includes(q)
+          f.students.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q)
       );
   }, [families, creditedIds, query]);
 
@@ -1778,14 +1779,14 @@ function BulkHoursDialog({
   const [saving, setSaving] = useState(false);
 
   const candidates = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return families
       .filter((f) => f.enrolled)
       .filter(
         (f) =>
           !q ||
-          f.name.toLowerCase().includes(q) ||
-          f.students.toLowerCase().includes(q)
+          f.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q) ||
+          f.students.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q)
       );
   }, [families, query]);
 

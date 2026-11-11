@@ -67,6 +67,7 @@ import type {
 } from "@/app/api/admin/store/orders/route";
 import { StageNameLink } from "@/components/admin/family-stage-link";
 import type { XanoStoreItem } from "@/lib/xano";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 function fmtDateTime(ms: number | null | undefined): string {
   if (!ms) return "—";
@@ -121,12 +122,12 @@ export default function AdminStorePage() {
     useState<AdminStoreOrderRow | null>(null);
   const filteredOrders = useMemo(() => {
     if (!orders) return [];
-    const q = search.trim().toLowerCase();
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     if (!q) return orders;
     return orders.filter((o) =>
       [o.family_name, o.item, o.purchaser_email, o.student_name ?? ""]
         .join(" ")
-        .toLowerCase()
+        .toLowerCase().replace(APOSTROPHE_VARIANTS, "'")
         .includes(q)
     );
   }, [orders, search]);

@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { GroupContact } from "@/app/api/admin/messages/group/audience/route";
 import type { XanoSchoolCalendarEvent } from "@/lib/xano";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /** A calendar event plus its day's date — what the reminder needs. */
 export type ReminderEvent = XanoSchoolCalendarEvent & { date: string };
@@ -170,9 +171,9 @@ export function EventReminderDialog({
   );
 
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
     return q
-      ? eligible.filter((c) => c.name.toLowerCase().includes(q))
+      ? eligible.filter((c) => c.name.toLowerCase().replace(APOSTROPHE_VARIANTS, "'").includes(q))
       : eligible;
   }, [eligible, query]);
 
