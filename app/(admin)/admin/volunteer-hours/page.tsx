@@ -76,6 +76,7 @@ import {
 } from "@/components/admin/event-upsert-dialog";
 import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
 import { VolunteerRecapDialog } from "@/components/admin/volunteer-recap-dialog";
+import { StageNameLink } from "@/components/admin/family-stage-link";
 import type {
   AdminVolunteerHoursResponse,
   EventRsvpRow,
@@ -496,8 +497,13 @@ export default function AdminVolunteerHoursPage() {
                     {pendingEntries.map((e) => (
                       <TableRow key={e.id}>
                         <TableCell className="font-medium">
-                          {familyById.get(e.registration_families_id)
-                            ?.name ?? `Family #${e.registration_families_id}`}
+                          <StageNameLink
+                            familyId={e.registration_families_id}
+                            yearId={yearId}
+                          >
+                            {familyById.get(e.registration_families_id)
+                              ?.name ?? `Family #${e.registration_families_id}`}
+                          </StageNameLink>
                         </TableCell>
                         <TableCell className="tabular-nums">
                           {fmtDate(e.entry_date)}
@@ -789,7 +795,7 @@ export default function AdminVolunteerHoursPage() {
                           className="cursor-pointer"
                           onClick={() => setOpenFamilyId(family.id)}
                         >
-                          <FamilyNameCell family={family} />
+                          <FamilyNameCell family={family} yearId={yearId} />
                           <TableCell className="text-right tabular-nums">
                             {formatHours(approved)}
                           </TableCell>
@@ -868,7 +874,7 @@ export default function AdminVolunteerHoursPage() {
                         className="cursor-pointer"
                         onClick={() => setOpenFamilyId(family.id)}
                       >
-                        <FamilyNameCell family={family} />
+                        <FamilyNameCell family={family} yearId={yearId} />
                         <TableCell>
                           <ChevronRight className="size-4 text-muted-foreground" />
                         </TableCell>
@@ -1067,8 +1073,16 @@ function StatCard({
 
 /** Family name with its students on the same line — "Powell Family •
  *  Micah Powell · Matthias Powell" — truncated to the column. The
- *  full text rides on `title` so a clipped list is still readable. */
-function FamilyNameCell({ family }: { family: VolunteerFamily }) {
+ *  full text rides on `title` so a clipped list is still readable.
+ *  The name itself is a link to the family's current stage page; the
+ *  rest of the row still opens the hours sheet. */
+function FamilyNameCell({
+  family,
+  yearId,
+}: {
+  family: VolunteerFamily;
+  yearId: number;
+}) {
   return (
     <TableCell
       className="truncate font-medium"
@@ -1076,7 +1090,9 @@ function FamilyNameCell({ family }: { family: VolunteerFamily }) {
         family.students ? `${family.name} • ${family.students}` : family.name
       }
     >
-      {family.name}
+      <StageNameLink familyId={family.id} yearId={yearId}>
+        {family.name}
+      </StageNameLink>
       {!family.enrolled ? (
         <span className="ml-1.5 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground align-middle">
           Not enrolled
@@ -1134,7 +1150,9 @@ function FamilySheet({
         className="flex w-full flex-col gap-0 overflow-y-auto overscroll-contain p-0 sm:max-w-lg"
       >
         <SheetHeader className="border-b px-4 py-3">
-          <SheetTitle className="text-base">{family.name}</SheetTitle>
+          <SheetTitle className="text-base">
+            <StageNameLink familyId={family.id}>{family.name}</StageNameLink>
+          </SheetTitle>
           <SheetDescription className="text-xs">
             {formatHours(approved)} of {HOURS_GOAL} hours approved
             {pending ? ` · ${formatHours(pending)} pending` : ""}
@@ -1581,8 +1599,10 @@ function AttendeesDialog({
                     className="flex items-center justify-between gap-2 rounded-md border bg-muted/10 px-3 py-1.5"
                   >
                     <span className="min-w-0 truncate text-sm">
-                      {familyById.get(e.registration_families_id)?.name ??
-                        `Family #${e.registration_families_id}`}
+                      <StageNameLink familyId={e.registration_families_id}>
+                        {familyById.get(e.registration_families_id)?.name ??
+                          `Family #${e.registration_families_id}`}
+                      </StageNameLink>
                       <span className="ml-1.5 text-xs text-muted-foreground">
                         {formatHours(Number(e.hours) || 0)} hrs
                         {!e.is_approved ? " · pending" : ""}
@@ -2063,7 +2083,9 @@ function RsvpListDialog({
                 {rsvps.map((r) => (
                   <TableRow key={r.id} className="hover:bg-transparent">
                     <TableCell className="pl-3 font-medium">
-                      {r.family_name}
+                      <StageNameLink familyId={r.registration_families_id}>
+                        {r.family_name}
+                      </StageNameLink>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {r.spots}

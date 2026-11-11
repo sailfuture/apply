@@ -66,6 +66,7 @@ import {
 } from "@/components/admin/email-preview-dialog";
 import { MessageMedia } from "@/components/admin/message-media";
 import { isMediaOnlyBody } from "@/lib/sms/media";
+import { StageNameLink } from "@/components/admin/family-stage-link";
 
 /**
  * Unified account activity sheet — ONE chronological stream per
@@ -377,7 +378,10 @@ export function ActivityLogSheet({
               Activity
               {data?.familyName ? (
                 <span className="font-normal text-muted-foreground">
-                  · {data.familyName}
+                  ·{" "}
+                  <StageNameLink familyId={familyId} yearId={yearId}>
+                    {data.familyName}
+                  </StageNameLink>
                 </span>
               ) : null}
             </SheetTitle>

@@ -1,5 +1,7 @@
 "use client";
 
+import { StageNameLink } from "@/components/admin/family-stage-link";
+
 import { useState } from "react";
 import { toast } from "sonner";
 import { Bell, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
@@ -351,7 +353,12 @@ function EventDetailBody({
                     >
                       <TableCell className="pl-3 whitespace-normal">
                         <span className="block font-medium">
-                          {s.family_name}
+                          <StageNameLink
+                            familyId={s.family_id}
+                            yearId={yearId}
+                          >
+                            {s.family_name}
+                          </StageNameLink>
                         </span>
                         <ParentNames names={s.parents} />
                       </TableCell>
@@ -601,7 +608,9 @@ function ItemRows({
             {i === 0 ? itemCell : null}
             <TableCell className="pr-3 align-top whitespace-normal">
               <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                <span>{c.family_name}</span>
+                <StageNameLink familyId={c.family_id}>
+                  {c.family_name}
+                </StageNameLink>
                 <span className="rounded-full bg-muted px-2 py-px text-[11px] font-medium tabular-nums text-foreground">
                   brings {c.quantity}
                 </span>

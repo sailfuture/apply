@@ -1,5 +1,7 @@
 "use client";
 
+import { StageNameLink } from "@/components/admin/family-stage-link";
+
 import { Fragment, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
@@ -353,7 +355,12 @@ function LaptopGroupCard({
                             <span>
                               {l.current?.student_name ? (
                                 <span className="font-medium whitespace-nowrap">
-                                  {l.current.student_name}
+                                  <StageNameLink
+                                    familyId={l.current.family_id}
+                                    studentId={l.current.enrolled_students_id}
+                                  >
+                                    {l.current.student_name}
+                                  </StageNameLink>
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">

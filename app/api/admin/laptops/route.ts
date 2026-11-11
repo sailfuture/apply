@@ -94,6 +94,9 @@ export async function GET(req: NextRequest) {
         id: a.id,
         laptops_id: Number(a.laptops_id) || 0,
         enrolled_students_id: student ? Number(student.id) || 0 : 0,
+        family_id: student
+          ? Number(student.registration_families_id) || 0
+          : 0,
         link_source: stamped ? "stamped" : derived ? "derived" : "none",
         student_name: student
           ? `${student.first_name} ${student.last_name}`.trim()
@@ -303,6 +306,9 @@ export interface LaptopAssignmentInfo {
    *  `scripts/backfill-laptop-links.ts` to persist those); `"none"` =
    *  no enrolled student found, so the row still needs a hand-link. */
   link_source: "stamped" | "derived" | "none";
+  /** That student's family — with the student id, what the name
+   *  link resolves the student's current stage page from. 0 = none. */
+  family_id: number;
   student_name: string;
   student_photo_url: string | null;
   /** Crew placement from the year's packet ("Crew A"–"Crew E"). */

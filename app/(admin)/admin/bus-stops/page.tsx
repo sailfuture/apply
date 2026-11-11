@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FamilyProfileSheet } from "@/components/admin/family-profile-sheet";
+import { StageNameLink } from "@/components/admin/family-stage-link";
 import { QuickTextDialog } from "@/components/admin/quick-text-dialog";
 import {
   Card,
@@ -224,6 +225,7 @@ export default function BusStopsPage() {
               key={stop.id ?? `orphan-${stop.name}`}
               stop={stop}
               index={i + 1}
+              yearId={yearId}
               onMessage={() => {
                 const byId = new Map<number, string>();
                 for (const r of stop.riders) {
@@ -306,6 +308,7 @@ export default function BusStopsPage() {
 function StopCard({
   stop,
   index,
+  yearId,
   onMessage,
   onOpenFamily,
   onEdit,
@@ -315,6 +318,8 @@ function StopCard({
   /** 1-based position in the page's pickup-time order — the route's
    *  stop number. */
   index: number;
+  /** The page's year — scopes the rider name links. */
+  yearId: string;
   /** "Message" click — opens the quick-text dialog for this stop's
    *  families. */
   onMessage: () => void;
@@ -446,7 +451,10 @@ function StopCard({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {/* Row click = the family's contact sheet (parents with
+              {/* The student and family NAMES are links to the page
+                  that student / family is on right now (enrolled,
+                  registration or application). Anywhere else on the
+                  row = the family's contact sheet (parents with
                   tap-to-call/email, students) — the Parent column
                   moved there so the roster stays scannable. The
                   chevron is a real button so keyboard users can reach
@@ -464,14 +472,24 @@ function StopCard({
                   >
                     <TableCell className="text-sm font-medium">
                       <span className="block truncate">
-                        {r.student_name}
+                        <StageNameLink
+                          familyId={r.family_id}
+                          studentId={r.student_id}
+                          yearId={yearId}
+                        >
+                          {r.student_name}
+                        </StageNameLink>
                       </span>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {r.grade || "—"}
                     </TableCell>
                     <TableCell className="text-sm">
-                      <span className="block truncate">{r.family_name}</span>
+                      <span className="block truncate">
+                        <StageNameLink familyId={r.family_id} yearId={yearId}>
+                          {r.family_name}
+                        </StageNameLink>
+                      </span>
                     </TableCell>
                     <TableCell className="text-right">
                       {clickable ? (

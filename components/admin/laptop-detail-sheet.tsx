@@ -1,5 +1,7 @@
 "use client";
 
+import { StageNameLink } from "@/components/admin/family-stage-link";
+
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -371,7 +373,14 @@ export function LaptopDetailSheet({
                           />
                           <div>
                             <p className="text-sm font-medium">
-                              {current.student_name || (
+                              {current.student_name ? (
+                                <StageNameLink
+                                  familyId={current.family_id}
+                                  studentId={current.enrolled_students_id}
+                                >
+                                  {current.student_name}
+                                </StageNameLink>
+                              ) : (
                                 <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
                                   Not linked to an enrolled student
                                 </span>
@@ -475,7 +484,14 @@ export function LaptopDetailSheet({
                                     size="sm"
                                   />
                                   <span className="whitespace-nowrap">
-                                    {h.student_name || (
+                                    {h.student_name ? (
+                                      <StageNameLink
+                                        familyId={h.family_id}
+                                        studentId={h.enrolled_students_id}
+                                      >
+                                        {h.student_name}
+                                      </StageNameLink>
+                                    ) : (
                                       <span className="text-muted-foreground">
                                         Staff-system record
                                       </span>

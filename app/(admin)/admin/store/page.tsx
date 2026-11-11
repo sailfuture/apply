@@ -65,6 +65,7 @@ import type {
   AdminStoreOrdersResponse,
   StoreFamilyOption,
 } from "@/app/api/admin/store/orders/route";
+import { StageNameLink } from "@/components/admin/family-stage-link";
 import type { XanoStoreItem } from "@/lib/xano";
 
 function fmtDateTime(ms: number | null | undefined): string {
@@ -315,19 +316,37 @@ function OrderRow({
         {relTime(Number(order.paid_at) || 0)}
       </TableCell>
       <TableCell className="truncate">
-        {/* Click to reassign — attribution is automatic (portal
-            reference / purchaser email) but not infallible. */}
-        <button
-          type="button"
-          onClick={onReassign}
-          title={`${order.family_name} · Change family assignment${order.purchaser_email ? ` · purchased by ${order.purchaser_email}` : ""}`}
-          className="group inline-flex max-w-full items-center gap-1.5 text-left"
-        >
-          <span className="min-w-0 truncate font-medium underline-offset-2 group-hover:underline">
-            {order.family_name}
-          </span>
-          <Pencil className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-        </button>
+        {/* The name opens the family's current stage page; the pencil
+            reassigns — attribution is automatic (portal reference /
+            purchaser email) but not infallible. An unattributed order
+            has no family to open, so its whole label reassigns. */}
+        <span className="group inline-flex max-w-full items-center gap-1.5">
+          {Number(order.registration_families_id) > 0 ? (
+            <StageNameLink
+              familyId={Number(order.registration_families_id)}
+              className="min-w-0 truncate font-medium"
+            >
+              {order.family_name}
+            </StageNameLink>
+          ) : (
+            <button
+              type="button"
+              onClick={onReassign}
+              className="min-w-0 truncate text-left font-medium underline-offset-2 hover:underline"
+            >
+              {order.family_name}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onReassign}
+            aria-label={`Change family assignment for ${order.family_name}`}
+            title={`Change family assignment${order.purchaser_email ? ` · purchased by ${order.purchaser_email}` : ""}`}
+            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          >
+            <Pencil className="size-3" />
+          </button>
+        </span>
       </TableCell>
       <TableCell
         className="truncate"
