@@ -15,6 +15,7 @@ import {
   MessageSquareText,
   Pencil,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -384,7 +385,7 @@ function StopCard({
                 size="sm"
                 className="h-7 bg-white px-2 text-xs"
                 onClick={onEdit}
-                title="Edit this stop's name, times, and address"
+                title="Edit this stop's name, times, and address, or delete it"
               >
                 <Pencil className="size-3 mr-1" aria-hidden="true" />
                 Edit
@@ -657,7 +658,81 @@ function StopUpsertDialog({
     hmmToInput(stop?.drop_off_time ?? null)
   );
   const [saving, setSaving] = useState(false);
+  // Delete is two clicks: the first swaps the dialog to a confirm
+  // step that says what happens to the stop's riders.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const renamed = stop != null && name.trim() !== stop.name;
+  const riderCount = stop?.riders.length ?? 0;
+
+  async function remove() {
+    if (stop?.id == null || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/bus-stops/${stop.id}`, {
+        method: "DELETE",
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success(`${stop.name} deleted.`);
+      onSaved();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete the stop."
+      );
+      setDeleting(false);
+    }
+  }
+
+  if (confirmingDelete && stop != null) {
+    return (
+      <Dialog open onOpenChange={(o) => !deleting && !o && onClose()}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete {stop.name}?</DialogTitle>
+            <DialogDescription>
+              Parents will no longer be able to pick this stop.{" "}
+              {riderCount > 0
+                ? `Its ${riderCount} rider${riderCount === 1 ? "" : "s"} this year stay${riderCount === 1 ? "s" : ""} listed under “${stop.name}” with a Move riders button, so you can put them on another stop.`
+                : "It has no riders this year."}{" "}
+              This can&rsquo;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-white"
+              disabled={deleting}
+              onClick={() => setConfirmingDelete(false)}
+            >
+              Keep stop
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleting}
+              onClick={remove}
+            >
+              {deleting ? (
+                <>
+                  <Loader2
+                    className="size-3.5 mr-1.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                  Deleting…
+                </>
+              ) : (
+                "Delete stop"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   async function save() {
     if (!name.trim() || saving) return;
@@ -793,6 +868,18 @@ function StopUpsertDialog({
           </div>
         </div>
         <DialogFooter>
+          {stop?.id != null ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive sm:mr-auto"
+              disabled={saving}
+              onClick={() => setConfirmingDelete(true)}
+            >
+              <Trash2 className="size-3.5 mr-1.5" aria-hidden="true" />
+              Delete stop
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"

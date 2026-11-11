@@ -4543,6 +4543,16 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
+
+    /** Removes the stop from the catalog only. Applications keep the
+     *  stop by NAME, so its riders are untouched — they list under
+     *  that name as an unmatched card until moved. */
+    async delete(id: number): Promise<void> {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_bus/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
   },
 
   /**

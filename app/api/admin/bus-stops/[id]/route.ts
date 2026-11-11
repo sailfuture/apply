@@ -90,3 +90,42 @@ export async function PATCH(
     return handleAdminError(err);
   }
 }
+
+/**
+ * Remove one stop from the catalog.
+ *
+ *   DELETE /api/admin/bus-stops/:id
+ *
+ * Only the catalog row goes: parents can no longer pick the stop.
+ * Applications reference stops by NAME, so riders still assigned to
+ * it are not changed — the roster lists them under the old name as
+ * an unmatched card with a Move riders button, the same as any other
+ * name that isn't in the catalog.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id } = await params;
+    const stopId = Number(id);
+    if (!Number.isFinite(stopId) || stopId <= 0) {
+      return NextResponse.json(
+        { error: "Invalid stop id" },
+        { status: 400 }
+      );
+    }
+    // Read first so a stale card (already deleted in another tab)
+    // answers 404 instead of a raw Xano error.
+    const existing = await xano.busStops.getAll();
+    const stop = existing.find((s) => s.id === stopId);
+    if (!stop) {
+      return NextResponse.json({ error: "Stop not found" }, { status: 404 });
+    }
+    await xano.busStops.delete(stopId);
+    return NextResponse.json({ ok: true, name: (stop.name ?? "").trim() });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
