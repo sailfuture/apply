@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { parseStopBody } from "@/lib/bus-stops";
+import { moveRidersBetweenStops, parseStopBody } from "@/lib/bus-stops";
 
 /**
  * Edit one catalog bus stop.
@@ -10,10 +10,10 @@ import { parseStopBody } from "@/lib/bus-stops";
  *   body: any of { name, address, pick_up_time, drop_off_time }
  *
  * Times use the column's H*100+MM clock encoding (810 = 8:10 AM).
- * NOTE: applications reference stops by NAME (the snapshot on the
- * bus election), so renaming a stop moves its existing riders into
- * the orphaned-name group on the rosters until their elections are
- * updated — the UI warns before a rename.
+ * Applications reference stops by NAME (the snapshot on the bus
+ * election), so a rename rewrites that name on every application
+ * that carried the old one — otherwise the stop's riders would fall
+ * out into a second, unmatched card on the rosters.
  */
 export async function PATCH(
   req: NextRequest,
@@ -43,8 +43,12 @@ export async function PATCH(
     // Renaming onto another stop's name would collide in the
     // name-keyed roster (hidden row) and duplicate the parent
     // picker — same guard as create, excluding this row itself.
+    let priorName = "";
     if (parsed.name) {
       const existing = await xano.busStops.getAll().catch(() => []);
+      priorName = (
+        existing.find((s) => s.id === stopId)?.name ?? ""
+      ).trim();
       const nameKey = parsed.name.toLowerCase();
       if (
         existing.some(
@@ -60,7 +64,28 @@ export async function PATCH(
       }
     }
     const stop = await xano.busStops.update(stopId, parsed);
-    return NextResponse.json({ ok: true, stop });
+    // Rename → carry the riders along. The stop itself is already
+    // saved, so a partial failure is reported rather than thrown: the
+    // leftover riders show as their own card with a Move riders button.
+    let ridersMoved = 0;
+    let ridersFailed = 0;
+    if (parsed.name && priorName && priorName !== parsed.name) {
+      try {
+        const r = await moveRidersBetweenStops({
+          from: priorName,
+          to: parsed.name,
+        });
+        ridersMoved = r.moved;
+        ridersFailed = r.failed;
+      } catch (err) {
+        console.error(
+          `[/api/admin/bus-stops/${stopId}] rider rename cascade failed:`,
+          err
+        );
+        ridersFailed = -1;
+      }
+    }
+    return NextResponse.json({ ok: true, stop, ridersMoved, ridersFailed });
   } catch (err) {
     return handleAdminError(err);
   }

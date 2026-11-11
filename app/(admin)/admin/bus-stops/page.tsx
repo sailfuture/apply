@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  ArrowRightLeft,
   Bus,
   ChevronRight,
   Clipboard,
@@ -25,6 +26,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FamilyProfileSheet } from "@/components/admin/family-profile-sheet";
 import { QuickTextDialog } from "@/components/admin/quick-text-dialog";
 import {
@@ -101,6 +109,12 @@ export default function BusStopsPage() {
   const [stopDialog, setStopDialog] = useState<{
     stop: BusStopGroup | null;
   } | null>(null);
+  // "Move riders" on a card whose name isn't in the stop list.
+  const [moveFrom, setMoveFrom] = useState<BusStopGroup | null>(null);
+  const catalogStops = useMemo(
+    () => stops.filter((s) => s.id != null),
+    [stops]
+  );
 
   if (!yearId) {
     return (
@@ -228,6 +242,7 @@ export default function BusStopsPage() {
               }}
               onOpenFamily={setProfileFamilyId}
               onEdit={() => setStopDialog({ stop })}
+              onMove={() => setMoveFrom(stop)}
             />
           ))}
         </div>
@@ -242,6 +257,21 @@ export default function BusStopsPage() {
           onSaved={() => {
             setStopDialog(null);
             void mutate();
+          }}
+        />
+      ) : null}
+
+      {moveFrom ? (
+        <MoveRidersDialog
+          key={moveFrom.name}
+          yearId={Number(yearId)}
+          from={moveFrom}
+          stops={catalogStops}
+          onClose={() => setMoveFrom(null)}
+          onMoved={async () => {
+            // Hold the dialog's spinner until the merged roster renders.
+            await mutate();
+            setMoveFrom(null);
           }}
         />
       ) : null}
@@ -279,6 +309,7 @@ function StopCard({
   onMessage,
   onOpenFamily,
   onEdit,
+  onMove,
 }: {
   stop: BusStopGroup;
   /** 1-based position in the page's pickup-time order — the route's
@@ -291,6 +322,8 @@ function StopCard({
   onOpenFamily: (familyId: number) => void;
   /** Pencil click — opens the edit dialog. Catalog stops only. */
   onEdit: () => void;
+  /** "Move riders" click — unmatched groups only. */
+  onMove: () => void;
 }) {
   const times = [
     stop.pick_up_time ? `Pickup ${formatTime(stop.pick_up_time)}` : null,
@@ -319,6 +352,11 @@ function StopCard({
                   {times}
                 </p>
               ) : null}
+              {stop.id == null ? (
+                <p className="mt-0.5 text-xs text-amber-700">
+                  Not in the stop list — move these riders to a stop.
+                </p>
+              ) : null}
               {stop.address ? (
                 <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                   <MapPin className="size-3 shrink-0" aria-hidden="true" />
@@ -331,8 +369,9 @@ function StopCard({
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
               {stop.riders.length}
             </span>
-            {/* Synthetic groups (orphaned stop names) have no catalog
-                row to edit. */}
+            {/* Synthetic groups (riders carrying a name that isn't in
+                the catalog) have no row to edit — they get Move riders
+                instead, which folds them into a real stop. */}
             {stop.id != null ? (
               <Button
                 type="button"
@@ -345,7 +384,19 @@ function StopCard({
                 <Pencil className="size-3 mr-1" aria-hidden="true" />
                 Edit
               </Button>
-            ) : null}
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 bg-white px-2 text-xs"
+                onClick={onMove}
+                title="Move these riders onto a stop in the list"
+              >
+                <ArrowRightLeft className="size-3 mr-1" aria-hidden="true" />
+                Move riders
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -623,7 +674,13 @@ function StopUpsertDialog({
       if (!res.ok) {
         throw new Error(result?.error ?? `Save failed (${res.status})`);
       }
-      toast.success(stop == null ? "Stop added." : "Stop updated.");
+      if (result?.ridersFailed) {
+        toast.warning(
+          "Stop renamed, but some riders didn't follow — use Move riders on the leftover card."
+        );
+      } else {
+        toast.success(stop == null ? "Stop added." : "Stop updated.");
+      }
       onSaved();
     } catch (err) {
       toast.error(
@@ -662,13 +719,10 @@ function StopUpsertDialog({
               disabled={saving}
             />
             {renamed ? (
-              // Applications snapshot the stop by NAME — a rename
-              // strands existing riders in an unmatched group until
-              // their bus elections are updated.
-              <p className="mt-1.5 text-xs text-amber-700">
-                Heads up: riders are linked to the stop&rsquo;s name.
-                Renaming moves this stop&rsquo;s current riders into an
-                unmatched group until their bus elections are updated.
+              // Applications snapshot the stop by NAME — the save
+              // rewrites it on every rider so they stay on this card.
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                This stop&rsquo;s riders move to the new name with it.
               </p>
             ) : null}
           </div>
@@ -747,6 +801,126 @@ function StopUpsertDialog({
               "Add stop"
             ) : (
               "Save changes"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Fold an unmatched group's riders into a catalog stop. Stays busy
+ *  until the parent's refreshed roster has rendered. */
+function MoveRidersDialog({
+  yearId,
+  from,
+  stops,
+  onClose,
+  onMoved,
+}: {
+  yearId: number;
+  from: BusStopGroup;
+  stops: BusStopGroup[];
+  onClose: () => void;
+  onMoved: () => Promise<void>;
+}) {
+  // Preselect the stop the old name most plausibly became ("Child's
+  // Park Recreation Center" → "Child's Park").
+  const guess = useMemo(() => {
+    const a = from.name.toLowerCase();
+    return (
+      stops.find((s) => {
+        const b = s.name.toLowerCase();
+        return a.includes(b) || b.includes(a);
+      })?.id ?? null
+    );
+  }, [from.name, stops]);
+  const [toId, setToId] = useState<string>(guess != null ? String(guess) : "");
+  const [saving, setSaving] = useState(false);
+  const count = from.riders.length;
+
+  async function move() {
+    if (!toId || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/bus-stops/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: from.name,
+          toStopId: Number(toId),
+          yearId,
+        }),
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Move failed (${res.status})`);
+      }
+      const moved = Number(result?.moved ?? count);
+      await onMoved();
+      toast.success(
+        `${moved} rider${moved === 1 ? "" : "s"} moved to ${result?.to ?? "the stop"}.`
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't move the riders."
+      );
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !saving && !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Move riders</DialogTitle>
+          <DialogDescription>
+            {count} rider{count === 1 ? " is" : "s are"} listed under
+            &ldquo;{from.name}&rdquo;, which isn&rsquo;t in the stop
+            list. Pick the stop they belong to.
+          </DialogDescription>
+        </DialogHeader>
+        <div>
+          <label
+            htmlFor="move-to-stop"
+            className="mb-1.5 block text-xs font-medium text-muted-foreground"
+          >
+            Move to
+          </label>
+          <Select value={toId} onValueChange={setToId} disabled={saving}>
+            <SelectTrigger id="move-to-stop" className="w-full bg-white">
+              <SelectValue placeholder="Choose a stop" />
+            </SelectTrigger>
+            <SelectContent>
+              {stops.map((s) => (
+                <SelectItem key={s.id} value={String(s.id)}>
+                  {s.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-white"
+            disabled={saving}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button type="button" disabled={saving || !toId} onClick={move}>
+            {saving ? (
+              <>
+                <Loader2
+                  className="size-3.5 mr-1.5 animate-spin"
+                  aria-hidden="true"
+                />
+                Moving…
+              </>
+            ) : (
+              "Move riders"
             )}
           </Button>
         </DialogFooter>

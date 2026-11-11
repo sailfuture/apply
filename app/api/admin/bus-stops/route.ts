@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { parseStopBody } from "@/lib/bus-stops";
+import { NO_STOP_LABEL, parseStopBody } from "@/lib/bus-stops";
 
 /**
  * Bus-stop rosters for the Operations → Bus Stops page.
@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
       }
       const fid = Number(a.registration_families_id) || 0;
       const parent = primaryParent(fid);
-      const stopName = (a.bus_stop ?? "").trim() || "No stop selected";
+      const stopName = (a.bus_stop ?? "").trim() || NO_STOP_LABEL;
       const list = ridersByStop.get(stopName) ?? [];
       list.push({
         student_id: sid,
