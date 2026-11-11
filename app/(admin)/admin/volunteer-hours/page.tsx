@@ -9,6 +9,7 @@ import {
   Check,
   ChevronRight,
   Loader2,
+  Mail,
   MapPin,
   Pencil,
   Plus,
@@ -74,6 +75,7 @@ import {
   eventColor,
 } from "@/components/admin/event-upsert-dialog";
 import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
+import { VolunteerRecapDialog } from "@/components/admin/volunteer-recap-dialog";
 import type {
   AdminVolunteerHoursResponse,
   EventRsvpRow,
@@ -309,6 +311,11 @@ export default function AdminVolunteerHoursPage() {
     { event: VolunteerEvent } | "new" | null
   >(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  // Hours-recap email: "all" = every enrolled family, a number = just
+  // that family (from its sheet).
+  const [recapTarget, setRecapTarget] = useState<"all" | number | null>(
+    null
+  );
   const [remindEvent, setRemindEvent] = useState<VolunteerEvent | null>(
     null
   );
@@ -389,6 +396,16 @@ export default function AdminVolunteerHoursPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={stats.enrolledCount === 0}
+            onClick={() => setRecapTarget("all")}
+          >
+            <Mail className="size-3.5 mr-1" />
+            Email hours recap
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -882,7 +899,18 @@ export default function AdminVolunteerHoursPage() {
             setEntryEdit({ familyId: openFamily.id, existing: e })
           }
           onDelete={(e) => setDeleteTarget(e)}
+          onRecap={() => setRecapTarget(openFamily.id)}
           onClose={() => setOpenFamilyId(null)}
+        />
+      ) : null}
+
+      {/* ── Hours-recap email ── */}
+      {recapTarget !== null ? (
+        <VolunteerRecapDialog
+          key={recapTarget}
+          yearId={yearId}
+          familyId={recapTarget === "all" ? undefined : recapTarget}
+          onDone={() => setRecapTarget(null)}
         />
       ) : null}
 
@@ -1077,6 +1105,7 @@ function FamilySheet({
   onAdd,
   onEdit,
   onDelete,
+  onRecap,
   onClose,
 }: {
   family: VolunteerFamily;
@@ -1087,6 +1116,8 @@ function FamilySheet({
   onAdd: () => void;
   onEdit: (e: XanoVolunteerHours) => void;
   onDelete: (e: XanoVolunteerHours) => void;
+  /** Opens the hours-recap email for this family. */
+  onRecap: () => void;
   onClose: () => void;
 }) {
   const approved = entries
@@ -1115,15 +1146,28 @@ function FamilySheet({
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Entries ({entries.length})
             </h3>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
-              onClick={onAdd}
-            >
-              <Plus className="size-3.5 mr-1" />
-              Add entry
-            </Button>
+            <div className="flex items-center gap-2">
+              {family.enrolled ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                  onClick={onRecap}
+                >
+                  <Mail className="size-3.5 mr-1" />
+                  Email recap
+                </Button>
+              ) : null}
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                onClick={onAdd}
+              >
+                <Plus className="size-3.5 mr-1" />
+                Add entry
+              </Button>
+            </div>
           </div>
 
           {entries.length === 0 ? (

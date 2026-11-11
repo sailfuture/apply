@@ -1359,3 +1359,142 @@ export function autopayPaymentFailed(
 
   return { subject, html, text };
 }
+
+/* ───────────────────── Volunteer hours recap ───────────────────── */
+/* End-of-term update on a family's progress toward the annual
+ * volunteer-hours goal. Sent by staff from Parents → Volunteer Hours
+ * (one button for every enrolled family, one per family), never on a
+ * schedule. Signed by the parent-engagement lead rather than the
+ * admissions team. */
+
+export interface VolunteerHoursRecapContext {
+  /** "2026–2027" — the school year the hours count toward. */
+  year_name: string;
+  /** Annual goal in hours (40). */
+  goal_hours: number;
+  /** Approved hours only — what the parent dashboard counts. */
+  hours_completed: number;
+  /** Goal minus completed, floored at 0. */
+  hours_remaining: number;
+  /** Submitted hours still waiting on staff review; 0 hides the line. */
+  hours_pending: number;
+  /** Approved entries, oldest first. */
+  credited: Array<{ date: string; label: string; hours: number }>;
+  /** Volunteer-credit events still ahead, soonest first. `when` is
+   *  the finished date (and time) text. */
+  upcoming: Array<{
+    when: string;
+    title: string;
+    location: string;
+    hours: number;
+  }>;
+  /** Parent volunteer-hours page. */
+  hours_url: string;
+}
+
+const RECAP_SIGNATURE = "Ms. Manke";
+
+function recapHours(value: number): string {
+  const n = Number.isFinite(value) ? value : 0;
+  const text = Number.isInteger(n)
+    ? String(n)
+    : n.toFixed(2).replace(/\.?0+$/, "");
+  return `${text} ${n === 1 ? "hour" : "hours"}`;
+}
+
+function recapList(items: string[]): string {
+  return `<ul style="margin:0 0 14px;padding-left:22px;">${items
+    .map((i) => `<li style="margin:0 0 6px;">${i}</li>`)
+    .join("")}</ul>`;
+}
+
+function recapHeading(text: string): string {
+  return `<p style="margin:20px 0 8px;font-weight:600;">${escapeHtml(text)}</p>`;
+}
+
+export function volunteerHoursRecap(
+  ctx: VolunteerHoursRecapContext
+): EmailContent {
+  const subject = `Your family's volunteer hours update for ${ctx.year_name}`;
+  const completed = recapHours(ctx.hours_completed);
+  const remaining = recapHours(ctx.hours_remaining);
+  const preheader = `${completed} completed, ${remaining} remaining toward the ${ctx.goal_hours}-hour goal.`;
+  const intro = `We wanted to share an update on your family's volunteer and engagement hours for the ${ctx.year_name} school year. Thank you for the time you've already dedicated to supporting our school community!`;
+  const metGoal = ctx.hours_remaining <= 0;
+  const metGoalLine = `Your family has met the ${ctx.goal_hours}-hour goal for the year. Thank you!`;
+  const pendingLine =
+    ctx.hours_pending > 0
+      ? `Awaiting review: ${recapHours(ctx.hours_pending)} (counted once approved)`
+      : "";
+
+  const creditedLines = ctx.credited.map(
+    (c) => `${c.date}: ${c.label} (${recapHours(c.hours)})`
+  );
+  const noCredited = "No hours have been credited yet this school year.";
+  const upcomingLines = ctx.upcoming.map(
+    (u) =>
+      `${u.when}: ${u.title}${u.location ? `, ${u.location}` : ""}${
+        u.hours > 0 ? ` (${recapHours(u.hours)})` : ""
+      }`
+  );
+  const noUpcoming =
+    "New opportunities are posted in your family portal as they are scheduled.";
+
+  const html = layout({
+    preheader,
+    body:
+      p("Dear SailFuture Families,") +
+      p(intro) +
+      recapHeading("Your Family's Hours:") +
+      recapList(
+        [
+          `Hours Completed: <strong>${escapeHtml(completed)}</strong>`,
+          `Hours Remaining: <strong>${escapeHtml(remaining)}</strong>`,
+          pendingLine ? escapeHtml(pendingLine) : "",
+        ].filter(Boolean)
+      ) +
+      (metGoal ? p(metGoalLine) : "") +
+      recapHeading("Events You've Received Credit For:") +
+      (creditedLines.length > 0
+        ? recapList(creditedLines.map(escapeHtml))
+        : p(noCredited)) +
+      recapHeading("Upcoming Opportunities:") +
+      (upcomingLines.length > 0
+        ? recapList(upcomingLines.map(escapeHtml))
+        : p(noUpcoming)) +
+      p("In Partnership,") +
+      p(RECAP_SIGNATURE),
+    buttonHref: ctx.hours_url,
+    buttonLabel: "View your volunteer hours",
+  });
+
+  const text = [
+    "Dear SailFuture Families,",
+    "",
+    intro,
+    "",
+    "Your Family's Hours:",
+    `- Hours Completed: ${completed}`,
+    `- Hours Remaining: ${remaining}`,
+    ...(pendingLine ? [`- ${pendingLine}`] : []),
+    ...(metGoal ? ["", metGoalLine] : []),
+    "",
+    "Events You've Received Credit For:",
+    ...(creditedLines.length > 0
+      ? creditedLines.map((l) => `- ${l}`)
+      : [noCredited]),
+    "",
+    "Upcoming Opportunities:",
+    ...(upcomingLines.length > 0
+      ? upcomingLines.map((l) => `- ${l}`)
+      : [noUpcoming]),
+    "",
+    `View your volunteer hours: ${ctx.hours_url}`,
+    "",
+    "In Partnership,",
+    "",
+    RECAP_SIGNATURE,
+  ].join("\n");
+
+  return { subject, html, text };
+}
