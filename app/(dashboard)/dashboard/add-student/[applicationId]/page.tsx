@@ -17,6 +17,7 @@ import { ServiceUnavailable } from "@/components/service-unavailable";
 import { NweaBookingDialog } from "@/components/nwea-booking-dialog";
 import { apiFetch } from "@/hooks/use-api";
 import { ArrowLeft, ArrowRight, ExternalLink } from "lucide-react";
+import { currentStopOrBlank } from "@/lib/bus-stop-picker";
 import { isMidYearAddition } from "@/lib/midyear-additions";
 import { ResidentialPacketForm } from "./residential-packet-form";
 import { SiblingApplication } from "./sibling-application";
@@ -156,7 +157,11 @@ export default function AddStudentRegistrationPage() {
           describe_student_opportunities_for_growth:
             appData.describe_student_opportunities_for_growth ?? "",
           is_bus_transportation: !!appData.is_bus_transportation,
-          bus_stop: appData.bus_stop ?? "",
+          // A stop renamed or retired since this row was saved reads
+          // as "pick a stop", never as a hidden stale name.
+          bus_stop: appData.is_bus_transportation
+            ? currentStopOrBlank(appData.bus_stop, stops)
+            : (appData.bus_stop ?? ""),
           sufs_award_id: appData.sufs_award_id ?? 0,
           nwea_testing_scheduled: !!appData.nwea_testing_scheduled,
           nwea_testing_complete: !!appData.nwea_testing_complete,

@@ -57,6 +57,7 @@ import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { apiFetch } from "@/hooks/use-api";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { currentStopOrBlank } from "@/lib/bus-stop-picker";
 import { useSWRConfig } from "swr";
 import {
   FileUpload,
@@ -371,6 +372,10 @@ export default function StudentsStepPage() {
           .sort((a, b) => a.id - b.id);
         setStudents(loadedStudents);
       }
+      // Stops first: the application rows below are checked against
+      // them, so a stop that was renamed or retired since the row was
+      // saved shows as "pick a stop" instead of riding along unseen.
+      const loadedStops: BusStop[] = busRes.ok ? await busRes.json() : [];
       if (appsRes.ok) {
         const allApps: Application[] = await appsRes.json();
         const yearApps = allApps
@@ -383,7 +388,9 @@ export default function StudentsStepPage() {
           .map((a) => ({
             ...a,
             primary_home: a.primary_home ?? "",
-            bus_stop: a.bus_stop ?? "",
+            bus_stop: a.is_bus_transportation
+              ? currentStopOrBlank(a.bus_stop, loadedStops)
+              : (a.bus_stop ?? ""),
           }))
           // Match the students sort: id ASC = creation order, so a
           // freshly-added student lands at the bottom of the list,
@@ -394,7 +401,7 @@ export default function StudentsStepPage() {
         // Keep all student cards open on initial load — don't auto-collapse
         // completed ones. Users can manually collapse via the chevron.
       }
-      if (busRes.ok) setBusStops(await busRes.json());
+      if (busRes.ok) setBusStops(loadedStops);
       loadedOnceRef.current = true;
       setLoadFailed(false);
     } catch (err) {
