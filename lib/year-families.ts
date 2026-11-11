@@ -24,7 +24,8 @@ export interface YearFamily {
  * Every family for one school year, name-sorted: enrolled via the
  * shared stage bucketing, with the year's student names from active
  * applications (the same application join the group-audience route
- * uses — year-scoped, inactive apps skipped, deduped per student).
+ * uses — year-scoped, inactive apps and unenrolled students skipped,
+ * deduped per student).
  *
  * Pure: callers load the tables, so a route that already has them for
  * other reasons doesn't fetch twice.
@@ -52,6 +53,16 @@ export function buildYearFamilies(input: {
       `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
     ])
   );
+  // Unenrolled students (the Unenroll modal sets `isArchived`) are
+  // left off the family's student list, and a family whose every
+  // student for the year is unenrolled doesn't count as enrolled: the
+  // family-level "confirmed" flag stays true after a student leaves,
+  // so stage alone can't tell. Same rule as the group-text audience.
+  const archivedStudents = new Set(
+    input.students.filter((s) => s.isArchived === true).map((s) => s.id)
+  );
+  const withActiveStudent = new Set<number>();
+  const withArchivedStudent = new Set<number>();
   const familyStudents = new Map<number, string[]>();
   for (const a of input.applications) {
     if (Number(a.registration_school_years_id) !== yearId) continue;
@@ -59,6 +70,11 @@ export function buildYearFamilies(input: {
     const fid = Number(a.registration_families_id);
     const sid = Number(a.registration_students_id);
     if (!fid || !sid) continue;
+    if (archivedStudents.has(sid)) {
+      withArchivedStudent.add(fid);
+      continue;
+    }
+    withActiveStudent.add(fid);
     const name = studentName.get(sid) || "";
     if (!name) continue;
     const list = familyStudents.get(fid) ?? [];
@@ -70,7 +86,9 @@ export function buildYearFamilies(input: {
     .map((f) => ({
       id: f.id,
       name: f.family_name?.trim() || `Family #${f.id}`,
-      enrolled: stageSets.enrolled.has(f.id),
+      enrolled:
+        stageSets.enrolled.has(f.id) &&
+        !(withArchivedStudent.has(f.id) && !withActiveStudent.has(f.id)),
       students: (familyStudents.get(f.id) ?? []).join(" · "),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));

@@ -17,9 +17,12 @@ export const VOLUNTEER_RECAP_TAG = "volunteer-hours-recap";
 /** How many upcoming events one email lists. */
 const UPCOMING_LIMIT = 8;
 
-/** One enrolled family's recap: who it goes to and what it says. */
+/** One enrolled household's recap: who it goes to and what it says. */
 export interface VolunteerRecapFamily {
+  /** Lowest family id in the household — the email is logged there. */
   id: number;
+  /** Every family record folded into this recap (usually just one). */
+  familyIds: number[];
   name: string;
   students: string;
   /** Every parent address on the family; empty = can't be emailed. */
@@ -130,7 +133,20 @@ export async function loadVolunteerRecaps(
   const familyRowById = new Map(families.map((f) => [f.id, f]));
   const hoursUrl = `${appBaseUrl().replace(/\/+$/, "")}/dashboard/volunteer-hours`;
 
-  const out: VolunteerRecapFamily[] = [];
+  // One recap per HOUSEHOLD, not per family record. Some households
+  // sit on several family records (one per student); each record is
+  // enrolled on its own, so sending per record emailed the same
+  // parents once per student. Records that share a parent email are
+  // folded into one recap: hours and credited events added together,
+  // every student listed, one email.
+  interface Household {
+    ids: number[];
+    names: string[];
+    students: string[];
+    emails: string[];
+  }
+  const households: Household[] = [];
+  const householdByEmail = new Map<string, Household>();
   for (const f of buildYearFamilies({
     yearId,
     families,
@@ -147,19 +163,51 @@ export async function loadVolunteerRecaps(
       if (email.includes("@") && !emails.includes(email)) emails.push(email);
     }
 
-    const entries = [...(entriesByFamily.get(f.id) ?? [])].sort((a, b) =>
-      (a.entry_date ?? "").localeCompare(b.entry_date ?? "")
-    );
+    // Every household this record shares an address with — more than
+    // one when it bridges two that were separate until now.
+    const matches = [
+      ...new Set(
+        emails
+          .map((e) => householdByEmail.get(e))
+          .filter((h): h is Household => Boolean(h))
+      ),
+    ];
+    let home = matches[0];
+    if (!home) {
+      home = { ids: [], names: [], students: [], emails: [] };
+      households.push(home);
+    }
+    for (const other of matches.slice(1)) {
+      home.ids.push(...other.ids);
+      home.names.push(...other.names);
+      home.students.push(...other.students);
+      home.emails.push(...other.emails);
+      households.splice(households.indexOf(other), 1);
+    }
+    home.ids.push(f.id);
+    home.names.push(f.name);
+    home.students.push(...(f.students ? f.students.split(" · ") : []));
+    home.emails.push(...emails);
+    for (const e of home.emails) householdByEmail.set(e, home);
+  }
+
+  const out: VolunteerRecapFamily[] = [];
+  for (const h of households) {
+    const ids = [...h.ids].sort((a, b) => a - b);
+    const entries = ids
+      .flatMap((id) => entriesByFamily.get(id) ?? [])
+      .sort((a, b) => (a.entry_date ?? "").localeCompare(b.entry_date ?? ""));
     const approved = entries.filter((e) => e.is_approved);
     const sum = (list: typeof entries) =>
       list.reduce((s, e) => s + (Number(e.hours) || 0), 0);
     const completed = sum(approved);
 
     out.push({
-      id: f.id,
-      name: f.name,
-      students: f.students,
-      emails,
+      id: ids[0],
+      familyIds: ids,
+      name: [...new Set(h.names)].join(" + "),
+      students: [...new Set(h.students)].join(" · "),
+      emails: [...new Set(h.emails)],
       context: {
         year_name: yearName,
         goal_hours: VOLUNTEER_HOURS_GOAL,
@@ -186,5 +234,6 @@ export async function loadVolunteerRecaps(
     });
   }
 
+  out.sort((a, b) => a.name.localeCompare(b.name));
   return { yearName, families: out };
 }

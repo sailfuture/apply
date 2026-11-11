@@ -69,7 +69,9 @@ export function VolunteerRecapDialog({
   );
   const rows = useMemo(() => {
     const all = data?.families ?? [];
-    return single ? all.filter((f) => f.id === familyId) : all;
+    return single
+      ? all.filter((f) => f.familyIds.includes(familyId as number))
+      : all;
   }, [data, single, familyId]);
   const sendableIds = useMemo(
     () => new Set(rows.filter((f) => f.emails.length > 0).map((f) => f.id)),
@@ -101,9 +103,7 @@ export function VolunteerRecapDialog({
   // Which family's email the preview shows: the one picked with the
   // eye button, else the first on the list.
   const [previewPick, setPreviewPick] = useState<number | null>(null);
-  const previewId = single
-    ? (familyId as number)
-    : (previewPick ?? rows[0]?.id ?? null);
+  const previewId = previewPick ?? rows[0]?.id ?? null;
   const previewFamily = rows.find((f) => f.id === previewId) ?? null;
   const {
     data: preview,
@@ -185,7 +185,7 @@ export function VolunteerRecapDialog({
             <DialogDescription>
               {single
                 ? "Emails this family their completed and remaining hours, the events they were credited for, and upcoming opportunities."
-                : "Emails each selected family their own completed and remaining hours, the events they were credited for, and upcoming opportunities."}
+                : "Emails each selected family their own completed and remaining hours, the events they were credited for, and upcoming opportunities. One email per household: family records that share a parent email are combined."}
             </DialogDescription>
           </DialogHeader>
 

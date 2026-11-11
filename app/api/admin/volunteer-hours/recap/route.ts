@@ -19,6 +19,8 @@ const RESEND_GUARD_MS = 20 * 60 * 60 * 1000;
 
 export interface VolunteerRecapListRow {
   id: number;
+  /** Every family record this one email covers (usually just one). */
+  familyIds: number[];
   name: string;
   students: string;
   emails: string[];
@@ -57,6 +59,8 @@ function parseYearId(raw: unknown): number | null {
  *
  *   GET ?yearId=Y            → the enrolled families the recap can go
  *                              to, with their hours and addresses.
+ *                              One row per household: family records
+ *                              that share a parent email are one row.
  *   GET ?yearId=Y&familyId=F → that family's email exactly as it would
  *                              send (subject + HTML), for the preview.
  *   POST { yearId, familyIds, resend? } → sends one recap per family
@@ -75,7 +79,7 @@ export async function GET(req: NextRequest) {
     const familyIdParam = req.nextUrl.searchParams.get("familyId");
     if (familyIdParam) {
       const family = recaps.families.find(
-        (f) => f.id === Number(familyIdParam)
+        (f) => f.familyIds.includes(Number(familyIdParam))
       );
       if (!family) {
         return NextResponse.json(
@@ -95,6 +99,7 @@ export async function GET(req: NextRequest) {
       yearName: recaps.yearName,
       families: recaps.families.map((f) => ({
         id: f.id,
+        familyIds: f.familyIds,
         name: f.name,
         students: f.students,
         emails: f.emails,
@@ -178,7 +183,11 @@ export async function POST(req: NextRequest) {
     const resend = body?.resend === true;
 
     const recaps = await loadVolunteerRecaps(yearId);
-    const targets = recaps.families.filter((f) => wanted.has(f.id));
+    // A household is one target however many of its family records
+    // were asked for, so it can never be emailed twice in one send.
+    const targets = recaps.families.filter((f) =>
+      f.familyIds.some((id) => wanted.has(id))
+    );
     if (targets.length === 0) {
       return NextResponse.json(
         { error: "None of those families are enrolled for this school year." },
