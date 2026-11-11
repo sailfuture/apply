@@ -21,6 +21,35 @@ export interface YearFamily {
 }
 
 /**
+ * Families whose EVERY student on the year has been unenrolled (the
+ * Unenroll modal sets `isArchived` on the student). The family-level
+ * flags (accepted, registration confirmed) stay true after a student
+ * leaves, so stage alone still reads these families as enrolled. Any
+ * list of who to email or text checks this as well. A family with no
+ * student on the year at all is NOT in the set.
+ */
+export function fullyUnenrolledFamilyIds(input: {
+  yearId: number;
+  applications: XanoApplication[];
+  students: XanoStudent[];
+}): Set<number> {
+  const archived = new Set(
+    input.students.filter((s) => s.isArchived === true).map((s) => s.id)
+  );
+  const withActive = new Set<number>();
+  const withArchived = new Set<number>();
+  for (const a of input.applications) {
+    if (Number(a.registration_school_years_id) !== input.yearId) continue;
+    if (a.isActive === false) continue;
+    const fid = Number(a.registration_families_id);
+    const sid = Number(a.registration_students_id);
+    if (!fid || !sid) continue;
+    (archived.has(sid) ? withArchived : withActive).add(fid);
+  }
+  return new Set([...withArchived].filter((fid) => !withActive.has(fid)));
+}
+
+/**
  * Every family for one school year, name-sorted: enrolled via the
  * shared stage bucketing, with the year's student names from active
  * applications (the same application join the group-audience route
@@ -61,8 +90,11 @@ export function buildYearFamilies(input: {
   const archivedStudents = new Set(
     input.students.filter((s) => s.isArchived === true).map((s) => s.id)
   );
-  const withActiveStudent = new Set<number>();
-  const withArchivedStudent = new Set<number>();
+  const fullyUnenrolled = fullyUnenrolledFamilyIds({
+    yearId,
+    applications: input.applications,
+    students: input.students,
+  });
   const familyStudents = new Map<number, string[]>();
   for (const a of input.applications) {
     if (Number(a.registration_school_years_id) !== yearId) continue;
@@ -70,11 +102,7 @@ export function buildYearFamilies(input: {
     const fid = Number(a.registration_families_id);
     const sid = Number(a.registration_students_id);
     if (!fid || !sid) continue;
-    if (archivedStudents.has(sid)) {
-      withArchivedStudent.add(fid);
-      continue;
-    }
-    withActiveStudent.add(fid);
+    if (archivedStudents.has(sid)) continue;
     const name = studentName.get(sid) || "";
     if (!name) continue;
     const list = familyStudents.get(fid) ?? [];
@@ -86,9 +114,7 @@ export function buildYearFamilies(input: {
     .map((f) => ({
       id: f.id,
       name: f.family_name?.trim() || `Family #${f.id}`,
-      enrolled:
-        stageSets.enrolled.has(f.id) &&
-        !(withArchivedStudent.has(f.id) && !withActiveStudent.has(f.id)),
+      enrolled: stageSets.enrolled.has(f.id) && !fullyUnenrolled.has(f.id),
       students: (familyStudents.get(f.id) ?? []).join(" · "),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));

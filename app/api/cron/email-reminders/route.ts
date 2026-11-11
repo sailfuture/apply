@@ -21,6 +21,7 @@ import {
 import { activeStripeSubscriptionId } from "@/lib/xano";
 import { sendBillingAlert, familyAlertLabel } from "@/lib/billing-alerts";
 import { getStripeClient } from "@/lib/stripe";
+import { fullyUnenrolledFamilyIds } from "@/lib/year-families";
 
 /**
  * Daily cron sweep that drives the three time-based reminder emails:
@@ -32,6 +33,8 @@ import { getStripeClient } from "@/lib/stripe";
  *   - Email 11 — back-to-school welcome (1-2 weeks before August
  *     24th, to every officially-enrolled family for the current
  *     year).
+ *     None of these three goes to a family whose every student on
+ *     the year has been unenrolled.
  *   - Past-due tuition — 7, 14 and 21 days after an open invoice's
  *     due date, to every parent on the family, with pay links (see
  *     lib/billing-past-due.ts).
@@ -174,9 +177,38 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    for (const { year, progresses } of yearData) {
+    // Unenrolled students, for the three reminder sweeps below: a
+    // family whose every student on the year has been unenrolled gets
+    // no draft, enrollment-agreement or back-to-school email. Their
+    // family-level flags stay true after the student leaves, so the
+    // progress rows alone still read as a live family. When the
+    // student list can't be read the three sweeps are held for the
+    // day (each is stamped once sent, so tomorrow's run catches up)
+    // rather than email a family that has left. Billing below is
+    // unaffected: it follows the live subscription.
+    let allStudents: Awaited<ReturnType<typeof xano.students.getAll>> | null =
+      null;
+    try {
+      allStudents = await xano.students.getAll();
+    } catch (err) {
+      console.error(
+        "[cron/email-reminders] student list unreadable — holding draft, enrollment and back-to-school reminders today:",
+        err
+      );
+    }
 
-      for (const p of progresses) {
+    for (const { year, progresses, apps } of yearData) {
+      const unenrolled = allStudents
+        ? fullyUnenrolledFamilyIds({
+            yearId: year.id,
+            applications: apps,
+            students: allStudents,
+          })
+        : null;
+
+      for (const p of unenrolled ? progresses : []) {
+        if (unenrolled?.has(Number(p.registration_families_id))) continue;
+
         // Archived rows are out of consideration for all three
         // sweeps — admin has explicitly set the family aside for
         // this year.
@@ -231,13 +263,14 @@ export async function GET(req: NextRequest) {
       // falls inside the configured window. Tied to the year's
       // first-day-of-school (Aug 24) — we don't fire this in any
       // other window even if the year is flagged active.
-      if (isBackToSchoolWindow(new Date())) {
+      if (unenrolled && isBackToSchoolWindow(new Date())) {
         const regs = await xano.studentRegistrationProgress.getByYear(
           year.id
         );
         for (const reg of regs) {
           if (reg.isArchived === true) continue;
           if (reg.isRegistrationConfirmed !== true) continue;
+          if (unenrolled.has(Number(reg.registration_families_id))) continue;
 
           // Dedupe stamp lives on the family-progress row, not the
           // registration-progress row — keeps all three notification
