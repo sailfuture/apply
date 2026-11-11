@@ -446,7 +446,9 @@ export default function EnrolledStudentsPage() {
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[18%]",
+      // No width: under the roster's fixed layout this column takes
+      // whatever the others leave, so the table always fits its card
+      // and a long family name truncates instead of widening it.
       // Family click = the family's CURRENT stage page for the year
       // (the overview or the one enrolled student once confirmed, the
       // registration page or application review before); stops
@@ -457,6 +459,7 @@ export default function EnrolledStudentsPage() {
           <button
             type="button"
             className="block max-w-full truncate text-left hover:underline"
+            title={row.family_name}
             onClick={(e) => {
               e.stopPropagation();
               router.push(stageHref(row.family_target));
@@ -1031,7 +1034,7 @@ function EnrolledRoster({
         <TableCell
           key={col.key}
           className={cn(
-            "text-sm",
+            "truncate text-sm",
             col.align === "right" && "text-right",
             col.align === "center" && "text-center"
           )}
@@ -1162,7 +1165,10 @@ function EnrolledRoster({
               </div>
             </CardHeader>
             <CardContent className="p-6 bg-white">
-              <Table>
+              {/* Fixed layout so the column widths hold: under auto
+                  layout one long family name ("Doyley Family (Brinson,
+                  Charles, …)") widened the table past its card. */}
+              <Table className="table-fixed">
                 {tableHead}
                 <TableBody>{group.rows.map(renderRow)}</TableBody>
               </Table>
