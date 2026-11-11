@@ -35,7 +35,7 @@ export default function RouteError({
 
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
-      <Card className="max-w-md">
+      <Card className="w-full max-w-md">
         <CardHeader>
           <div className="mb-2 flex size-10 items-center justify-center rounded-full bg-muted">
             <TriangleAlert className="size-5 text-muted-foreground" />

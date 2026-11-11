@@ -184,8 +184,10 @@ export async function GET(req: NextRequest) {
     // progress rows alone still read as a live family. When the
     // student list can't be read the three sweeps are held for the
     // day (each is stamped once sent, so tomorrow's run catches up)
-    // rather than email a family that has left. Billing below is
-    // unaffected: it follows the live subscription.
+    // rather than email a family that has left. The tuition texts and
+    // past-due emails below skip the same families, and are held the
+    // same way. Autopay itself still follows the live subscription:
+    // stopping a family's charges is done by cancelling it.
     let allStudents: Awaited<ReturnType<typeof xano.students.getAll>> | null =
       null;
     try {
@@ -311,8 +313,9 @@ export async function GET(req: NextRequest) {
 
       // The families the school is still billing this year, by their
       // live subscription: not residential (never tuition-billed). A
-      // fully unenrolled family's leftover invoice is a staff call,
-      // made in Stripe. Null when the family list can't be read, which
+      // fully unenrolled family is still in this map while its
+      // subscription is live, but the texts and emails below leave it
+      // out: a leftover invoice is a staff call, made in Stripe. Null when the family list can't be read, which
       // skips autopay and the billing emails and texts today rather than act on
       // a residential family. Tomorrow's run catches up.
       let billingSubscriptions: Map<number, string> | null = null;
@@ -378,11 +381,11 @@ export async function GET(req: NextRequest) {
       // autopay link. Deduped per (invoice, stage) via the SMS log, and
       // held for the next run when the log can't be read. Only the
       // families in `billingSubscriptions`, so never residential.
-      if (billingTextsOn && billingSubscriptions) {
+      if (billingTextsOn && billingSubscriptions && unenrolled) {
         const billing = billingSubscriptions;
         const planned = planBillingTexts({
           txns: reminderTxns,
-          isBillableFamily: (id) => billing.has(id),
+          isBillableFamily: (id) => billing.has(id) && !unenrolled.has(id),
           isOnAutopay: (subId) => onAutopay.has(subId),
           // What each family owes past due across the year, so every
           // text can say "Total past due on your account" beside the
@@ -433,11 +436,11 @@ export async function GET(req: NextRequest) {
       // overdue invoices share one email, and deduped per (invoice,
       // stage) against the email log. Only the families in
       // `billingSubscriptions` above.
-      if (billingSubscriptions) {
+      if (billingSubscriptions && unenrolled) {
         const billing = billingSubscriptions;
         const plans = planPastDueEmails({
           txns: reminderTxns,
-          isBillableFamily: (id) => billing.has(id),
+          isBillableFamily: (id) => billing.has(id) && !unenrolled.has(id),
           payUrlFor: (tx) =>
             tx.hosted_invoice_url
               ? `${appBaseUrl}/pay/${tx.stripe_invoice_id}`

@@ -15,7 +15,11 @@ import { WrenchIcon } from "lucide-react";
 export function ServiceUnavailable({ onRetry }: { onRetry?: () => void }) {
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
-      <Card className="max-w-md">
+      {/* `w-full` is load-bearing: the card is a flex item, and its
+          header is a size container, which contributes no width of its
+          own. Without it the card shrank to the "Try again" button and
+          the text wrapped a word per line. */}
+      <Card className="w-full max-w-md">
         <CardHeader>
           <div className="mb-2 flex size-10 items-center justify-center rounded-full bg-muted">
             <WrenchIcon className="size-5 text-muted-foreground" />
