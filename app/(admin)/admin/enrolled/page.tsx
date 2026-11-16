@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   ChevronUp,
+  Copy,
   FileDown,
   GraduationCap,
   Loader2,
@@ -346,6 +347,39 @@ export default function EnrolledStudentsPage() {
     return { latest, never };
   }, [enrolledRows, search]);
 
+  // Copy primary-contact emails — every ENROLLED student currently
+  // shown (chips + search apply, unenrolled excluded), one address per
+  // family since siblings share a primary contact. Comma-separated so
+  // it pastes straight into a To/Bcc field.
+  const primaryEmails = useMemo(() => {
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of enrolledRows) {
+      if (q && !matchesEnrolledSearch(r, q)) continue;
+      const email = (r.primary_email ?? "").trim();
+      if (!email) continue;
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(email);
+    }
+    return out;
+  }, [enrolledRows, search]);
+
+  async function copyPrimaryEmails() {
+    if (primaryEmails.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(primaryEmails.join(", "));
+      toast.success(
+        `Copied ${primaryEmails.length} primary contact email${primaryEmails.length === 1 ? "" : "s"}.`
+      );
+    } catch (err) {
+      console.error("[copyPrimaryEmails] failed:", err);
+      toast.error("Couldn't copy to the clipboard.");
+    }
+  }
+
   async function downloadLogins() {
     if (printingLogins || loginCandidates.length === 0) return;
     setPrintingLogins(true);
@@ -639,7 +673,7 @@ export default function EnrolledStudentsPage() {
         />
       ) : null}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold">
             Enrolled Students
             {schoolYear?.year_name ? (
@@ -657,6 +691,24 @@ export default function EnrolledStudentsPage() {
             details.
           </p>
         </div>
+        {yearId ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white shrink-0"
+            disabled={primaryEmails.length === 0}
+            onClick={() => void copyPrimaryEmails()}
+            title={
+              primaryEmails.length === 0
+                ? "No shown enrolled students have a primary contact email"
+                : "Copy the primary contact email for every enrolled student currently shown (one per family)"
+            }
+          >
+            <Copy className="size-3.5 mr-1.5" aria-hidden="true" />
+            Copy emails
+            {primaryEmails.length > 0 ? ` (${primaryEmails.length})` : ""}
+          </Button>
+        ) : null}
       </div>
 
       {/* Search on its own full-width row under the header, then the
