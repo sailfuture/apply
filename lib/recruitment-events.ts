@@ -17,7 +17,9 @@
  *     times in the dialog but editable (setup, travel).
  *   - `hours_type` is "working" | "outside" (the Notion "PTO Balance"
  *     column: whether the event fell inside working hours).
- *   - `event_type` is "event" | "tabling" | "" (not set yet).
+ *   - `event_type` is "event" | "tabling" | "door_knocking" | "" (not
+ *     set yet). The impact site (impact.sailfutureacademy.org) counts
+ *     door knocking hours apart from every other type's, by this value.
  *   - `staff` is a JSON array of staff names (free text, picked from
  *     the admin + faculty lists or typed).
  *   - `files` holds Xano vault attachment metadata, as uploaded
@@ -40,6 +42,11 @@ export const EVENT_TYPES = [
     value: "tabling",
     label: "Tabling",
     chip: "bg-sky-100 text-sky-900",
+  },
+  {
+    value: "door_knocking",
+    label: "Door knocking",
+    chip: "bg-amber-100 text-amber-900",
   },
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number]["value"];
@@ -212,7 +219,7 @@ export function parseRecruitmentEventBody(
   if ("event_type" in b) {
     const v = str(b.event_type);
     if (v && !EVENT_TYPES.some((t) => t.value === v)) {
-      return { error: "event_type must be event or tabling" };
+      return { error: "event_type must be event, tabling or door_knocking" };
     }
     out.event_type = v as EventType | "";
   }
