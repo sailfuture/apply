@@ -468,6 +468,9 @@ async function handleGET(req: NextRequest) {
           // on every successful sync. Surfaced so admin can see how
           // stale the LMS is without opening each student.
           toddle_synced_at: student.toddle_synced_at ?? null,
+          // The school email alone (never the password) — feeds the
+          // crew cards' "Student emails" copy button.
+          school_email: (student.school_email ?? "").trim(),
           has_school_account:
             (student.school_email ?? "").trim().length > 0 &&
             (student.school_password ?? "").trim().length > 0,
@@ -590,6 +593,8 @@ export interface EnrolledStudentRow {
    *  the "Sign-in sheets" button; the credentials themselves stay
    *  server-side. */
   has_school_account: boolean;
+  /** Student's school Google address ("" until generated). */
+  school_email: string;
   /** True when the student is officially enrolled for the year:
    *  `student.isEnrolled === true && student.isArchived !== true`.
    *  Drives the Enrolled vs Not Enrolled grouping on the page. */

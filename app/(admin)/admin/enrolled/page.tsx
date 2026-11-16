@@ -1176,7 +1176,8 @@ function EnrolledRoster({
                 </span>
               </div>
               <CardAction className="row-span-1 self-center flex items-center gap-1.5">
-                <CopyEmailsButton rows={group.rows} />
+                <CopyEmailsButton rows={group.rows} kind="parent" />
+                <CopyEmailsButton rows={group.rows} kind="student" />
                 <EnrolledExportDialog
                   yearId={yearId}
                   yearName={yearName}
@@ -1210,17 +1211,27 @@ function EnrolledRoster({
 }
 
 /**
- * Grade-card "Copy emails" — copies the primary contact email of every
- * student in the card (already narrowed by the search + chips), one
- * address per family since siblings share a primary contact.
- * Comma-separated so it pastes straight into a To/Bcc field.
+ * Crew-card copy buttons. "parent" copies each student's primary
+ * contact email, one per family since siblings share a primary
+ * contact; "student" copies each student's school Google address
+ * (students without one generated yet are skipped). Both cover the
+ * students in the card, already narrowed by the search + chips, and
+ * join with ", " so the list pastes straight into a To/Bcc field.
  */
-function CopyEmailsButton({ rows }: { rows: EnrolledStudentRow[] }) {
+function CopyEmailsButton({
+  rows,
+  kind,
+}: {
+  rows: EnrolledStudentRow[];
+  kind: "parent" | "student";
+}) {
   const emails = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
     for (const r of rows) {
-      const email = (r.primary_email ?? "").trim();
+      const email = (
+        (kind === "parent" ? r.primary_email : r.school_email) ?? ""
+      ).trim();
       if (!email) continue;
       const key = email.toLowerCase();
       if (seen.has(key)) continue;
@@ -1228,14 +1239,22 @@ function CopyEmailsButton({ rows }: { rows: EnrolledStudentRow[] }) {
       out.push(email);
     }
     return out;
-  }, [rows]);
+  }, [rows, kind]);
+  const noun = kind === "parent" ? "parent" : "student";
+  const missing =
+    kind === "student"
+      ? rows.filter((r) => !(r.school_email ?? "").trim()).length
+      : 0;
 
   async function copy() {
     if (emails.length === 0) return;
     try {
       await navigator.clipboard.writeText(emails.join(", "));
       toast.success(
-        `Copied ${emails.length} primary contact email${emails.length === 1 ? "" : "s"}.`
+        `Copied ${emails.length} ${noun} email${emails.length === 1 ? "" : "s"}.` +
+          (missing > 0
+            ? ` ${missing} student${missing === 1 ? " has" : "s have"} no school email yet.`
+            : "")
       );
     } catch (err) {
       console.error("[CopyEmailsButton] failed:", err);
@@ -1252,12 +1271,16 @@ function CopyEmailsButton({ rows }: { rows: EnrolledStudentRow[] }) {
       onClick={() => void copy()}
       title={
         emails.length === 0
-          ? "No students in this card have a primary contact email"
-          : `Copy the primary contact email for every student in this card (${emails.length}, one per family)`
+          ? kind === "parent"
+            ? "No students in this card have a primary contact email"
+            : 'No students in this card have a school email yet — run "Create Student Emails" first'
+          : kind === "parent"
+            ? `Copy the primary contact email for every student in this card (${emails.length}, one per family)`
+            : `Copy the school email of every student in this card (${emails.length}${missing > 0 ? `; ${missing} without one yet` : ""})`
       }
     >
       <Copy className="size-3.5 mr-1" aria-hidden="true" />
-      Copy emails
+      {kind === "parent" ? "Parent emails" : "Student emails"}
     </Button>
   );
 }
