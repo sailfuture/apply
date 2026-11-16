@@ -31,27 +31,47 @@ import {
  * unenrolled × community / residential). Generates the .xlsx
  * client-side and downloads it. The body — and its data fetch — only
  * mount while the dialog is open.
+ *
+ * Pass `scope` to export just one grade card: the dialog then covers
+ * only those students (the card already reflects the page's search +
+ * chips), so the status/program filters are hidden.
  */
 export function EnrolledExportDialog({
   yearId,
   yearName,
+  scope,
 }: {
   yearId: number;
   yearName?: string | null;
+  scope?: { label: string; studentIds: number[] };
 }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="bg-white shrink-0">
-          <Download className="size-3.5 mr-1.5" aria-hidden="true" />
-          Export
-        </Button>
+        {scope ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 bg-white px-2.5 text-xs"
+            disabled={scope.studentIds.length === 0}
+            title={`Export the ${scope.studentIds.length} student${scope.studentIds.length === 1 ? "" : "s"} in this card`}
+          >
+            <Download className="size-3.5 mr-1" aria-hidden="true" />
+            Export
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" className="bg-white shrink-0">
+            <Download className="size-3.5 mr-1.5" aria-hidden="true" />
+            Export
+          </Button>
+        )}
       </DialogTrigger>
       {open ? (
         <ExportDialogBody
           yearId={yearId}
           yearName={yearName}
+          scope={scope}
           onClose={() => setOpen(false)}
         />
       ) : null}
@@ -59,13 +79,22 @@ export function EnrolledExportDialog({
   );
 }
 
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
 function ExportDialogBody({
   yearId,
   yearName,
+  scope,
   onClose,
 }: {
   yearId: number;
   yearName?: string | null;
+  scope?: { label: string; studentIds: number[] };
   onClose: () => void;
 }) {
   const { data, isLoading, error } = useSWR<EnrolledExportRow[]>(
@@ -75,12 +104,14 @@ function ExportDialogBody({
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   const [filename, setFilename] = useState(() => {
-    const slug = (yearName ?? `year-${yearId}`)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "");
-    return `enrolled-students-${slug || yearId}`;
+    const slug = slugify(yearName ?? `year-${yearId}`);
+    const scopeSlug = scope ? slugify(scope.label) : "";
+    return `enrolled-students-${scopeSlug ? `${scopeSlug}-` : ""}${slug || yearId}`;
   });
+  const scopeIds = useMemo(
+    () => (scope ? new Set(scope.studentIds) : null),
+    [scope]
+  );
   const [selected, setSelected] = useState<Set<ExportColumnKey>>(
     () =>
       new Set(
@@ -97,6 +128,8 @@ function ExportDialogBody({
   const filtered = useMemo(
     () =>
       rows.filter((r) => {
+        // A grade-card export covers exactly that card's students.
+        if (scopeIds) return scopeIds.has(r.student_id);
         const statusOk =
           (r.is_enrolled && status.enrolled) ||
           (r.is_archived && status.unenrolled);
@@ -105,7 +138,7 @@ function ExportDialogBody({
           : program.community;
         return statusOk && programOk;
       }),
-    [rows, status, program]
+    [rows, status, program, scopeIds]
   );
 
   const selectedColumns = useMemo(
@@ -175,11 +208,13 @@ function ExportDialogBody({
   return (
     <DialogContent className="sm:max-w-2xl max-h-[88vh] flex flex-col gap-0 overflow-hidden">
       <DialogHeader>
-        <DialogTitle>Export enrolled students</DialogTitle>
+        <DialogTitle>
+          {scope ? `Export ${scope.label}` : "Export enrolled students"}
+        </DialogTitle>
         <DialogDescription>
-          Pick a filename, the columns to include, and which students to
-          export. Each row is a student; the columns are the fields you
-          choose.
+          {scope
+            ? `Pick a filename and the columns to include for the students shown in the ${scope.label} card. Each row is a student; the columns are the fields you choose.`
+            : "Pick a filename, the columns to include, and which students to export. Each row is a student; the columns are the fields you choose."}
         </DialogDescription>
       </DialogHeader>
 
@@ -199,7 +234,9 @@ function ExportDialogBody({
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Filters — hidden for a grade-card export, whose students
+            are fixed by the card. */}
+        {scope ? null : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FilterGroup title="Enrollment status">
             <CheckRow
@@ -226,6 +263,7 @@ function ExportDialogBody({
             />
           </FilterGroup>
         </div>
+        )}
 
         {/* Columns */}
         <div className="space-y-2">

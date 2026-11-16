@@ -24,6 +24,7 @@ import { stageHref } from "@/lib/admin-stage";
 import { Input } from "@/components/ui/input";
 import {
   Card,
+  CardAction,
   CardContent,
   CardHeader,
   CardTitle,
@@ -347,39 +348,6 @@ export default function EnrolledStudentsPage() {
     return { latest, never };
   }, [enrolledRows, search]);
 
-  // Copy primary-contact emails — every ENROLLED student currently
-  // shown (chips + search apply, unenrolled excluded), one address per
-  // family since siblings share a primary contact. Comma-separated so
-  // it pastes straight into a To/Bcc field.
-  const primaryEmails = useMemo(() => {
-    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const r of enrolledRows) {
-      if (q && !matchesEnrolledSearch(r, q)) continue;
-      const email = (r.primary_email ?? "").trim();
-      if (!email) continue;
-      const key = email.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(email);
-    }
-    return out;
-  }, [enrolledRows, search]);
-
-  async function copyPrimaryEmails() {
-    if (primaryEmails.length === 0) return;
-    try {
-      await navigator.clipboard.writeText(primaryEmails.join(", "));
-      toast.success(
-        `Copied ${primaryEmails.length} primary contact email${primaryEmails.length === 1 ? "" : "s"}.`
-      );
-    } catch (err) {
-      console.error("[copyPrimaryEmails] failed:", err);
-      toast.error("Couldn't copy to the clipboard.");
-    }
-  }
-
   async function downloadLogins() {
     if (printingLogins || loginCandidates.length === 0) return;
     setPrintingLogins(true);
@@ -673,7 +641,7 @@ export default function EnrolledStudentsPage() {
         />
       ) : null}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex-1 min-w-0">
+        <div>
           <h1 className="text-2xl font-bold">
             Enrolled Students
             {schoolYear?.year_name ? (
@@ -691,24 +659,6 @@ export default function EnrolledStudentsPage() {
             details.
           </p>
         </div>
-        {yearId ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="bg-white shrink-0"
-            disabled={primaryEmails.length === 0}
-            onClick={() => void copyPrimaryEmails()}
-            title={
-              primaryEmails.length === 0
-                ? "No shown enrolled students have a primary contact email"
-                : "Copy the primary contact email for every enrolled student currently shown (one per family)"
-            }
-          >
-            <Copy className="size-3.5 mr-1.5" aria-hidden="true" />
-            Copy emails
-            {primaryEmails.length > 0 ? ` (${primaryEmails.length})` : ""}
-          </Button>
-        ) : null}
       </div>
 
       {/* Search on its own full-width row under the header, then the
@@ -922,6 +872,8 @@ export default function EnrolledStudentsPage() {
             search={search}
             emptyLabel="No students officially enrolled for this year yet."
             onRowClick={(row) => setSheetRow(row)}
+            yearId={Number(yearId)}
+            yearName={schoolYear?.year_name}
           />
           {/* Unenrolled group — students who were officially
               enrolled at some point and have since been unenrolled
@@ -941,6 +893,8 @@ export default function EnrolledStudentsPage() {
               search={search}
               emptyLabel="No students in this bucket."
               onRowClick={(row) => setSheetRow(row)}
+              yearId={Number(yearId)}
+              yearName={schoolYear?.year_name}
             />
           ) : null}
         </div>
@@ -969,10 +923,15 @@ function EnrolledRoster({
   search,
   emptyLabel,
   onRowClick,
+  yearId,
+  yearName,
 }: {
   /** Page-level search value — one bar above the cards drives both
    *  rosters. */
   search: string;
+  /** Feeds each grade card's Export dialog. */
+  yearId: number;
+  yearName?: string | null;
   /** Section label — "Enrolled" or "Unenrolled" so the page can
    *  render two stacked rosters with the same chrome. */
   title: string;
@@ -1216,6 +1175,23 @@ function EnrolledRoster({
                   ({group.rows.length})
                 </span>
               </div>
+              <CardAction className="row-span-1 self-center flex items-center gap-1.5">
+                <CopyEmailsButton rows={group.rows} />
+                <EnrolledExportDialog
+                  yearId={yearId}
+                  yearName={yearName}
+                  scope={{
+                    // "9th Grade" on the Enrolled roster; prefixed on the
+                    // Unenrolled one so the file says which bucket.
+                    label: `${title === "Enrolled" ? "" : `${title} `}${
+                      group.grade === "—"
+                        ? "No grade level set"
+                        : `${group.grade} Grade`
+                    }`,
+                    studentIds: group.rows.map((r) => r.student_id),
+                  }}
+                />
+              </CardAction>
             </CardHeader>
             <CardContent className="p-6 bg-white">
               {/* Fixed layout so the column widths hold: under auto
@@ -1230,6 +1206,59 @@ function EnrolledRoster({
         ))
       )}
     </section>
+  );
+}
+
+/**
+ * Grade-card "Copy emails" — copies the primary contact email of every
+ * student in the card (already narrowed by the search + chips), one
+ * address per family since siblings share a primary contact.
+ * Comma-separated so it pastes straight into a To/Bcc field.
+ */
+function CopyEmailsButton({ rows }: { rows: EnrolledStudentRow[] }) {
+  const emails = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of rows) {
+      const email = (r.primary_email ?? "").trim();
+      if (!email) continue;
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(email);
+    }
+    return out;
+  }, [rows]);
+
+  async function copy() {
+    if (emails.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(emails.join(", "));
+      toast.success(
+        `Copied ${emails.length} primary contact email${emails.length === 1 ? "" : "s"}.`
+      );
+    } catch (err) {
+      console.error("[CopyEmailsButton] failed:", err);
+      toast.error("Couldn't copy to the clipboard.");
+    }
+  }
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-7 bg-white px-2.5 text-xs"
+      disabled={emails.length === 0}
+      onClick={() => void copy()}
+      title={
+        emails.length === 0
+          ? "No students in this card have a primary contact email"
+          : `Copy the primary contact email for every student in this card (${emails.length}, one per family)`
+      }
+    >
+      <Copy className="size-3.5 mr-1" aria-hidden="true" />
+      Copy emails
+    </Button>
   );
 }
 
