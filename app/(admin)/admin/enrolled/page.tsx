@@ -348,6 +348,15 @@ export default function EnrolledStudentsPage() {
     return { latest, never };
   }, [enrolledRows, search]);
 
+  // Every ENROLLED student currently shown (chips + search apply) —
+  // feeds the header's "Student emails" copy button.
+  const shownEnrolledRows = useMemo(() => {
+    const q = search.trim().toLowerCase().replace(APOSTROPHE_VARIANTS, "'");
+    return q
+      ? enrolledRows.filter((r) => matchesEnrolledSearch(r, q))
+      : enrolledRows;
+  }, [enrolledRows, search]);
+
   async function downloadLogins() {
     if (printingLogins || loginCandidates.length === 0) return;
     setPrintingLogins(true);
@@ -641,7 +650,7 @@ export default function EnrolledStudentsPage() {
         />
       ) : null}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold">
             Enrolled Students
             {schoolYear?.year_name ? (
@@ -659,6 +668,13 @@ export default function EnrolledStudentsPage() {
             details.
           </p>
         </div>
+        {yearId ? (
+          <CopyEmailsButton
+            rows={shownEnrolledRows}
+            kind="student"
+            size="default"
+          />
+        ) : null}
       </div>
 
       {/* Search on its own full-width row under the header, then the
@@ -1221,9 +1237,13 @@ function EnrolledRoster({
 function CopyEmailsButton({
   rows,
   kind,
+  size = "card",
 }: {
   rows: EnrolledStudentRow[];
   kind: "parent" | "student";
+  /** "card" = the compact crew-card header style; "default" = the
+   *  page-header style, matching the toolbar buttons. */
+  size?: "card" | "default";
 }) {
   const emails = useMemo(() => {
     const seen = new Set<string>();
@@ -1241,6 +1261,7 @@ function CopyEmailsButton({
     return out;
   }, [rows, kind]);
   const noun = kind === "parent" ? "parent" : "student";
+  const where = size === "card" ? "in this card" : "currently shown";
   const missing =
     kind === "student"
       ? rows.filter((r) => !(r.school_email ?? "").trim()).length
@@ -1266,21 +1287,29 @@ function CopyEmailsButton({
     <Button
       variant="outline"
       size="sm"
-      className="h-7 bg-white px-2.5 text-xs"
+      className={
+        size === "card"
+          ? "h-7 bg-white px-2.5 text-xs"
+          : "bg-white shrink-0"
+      }
       disabled={emails.length === 0}
       onClick={() => void copy()}
       title={
         emails.length === 0
           ? kind === "parent"
-            ? "No students in this card have a primary contact email"
-            : 'No students in this card have a school email yet — run "Create Student Emails" first'
+            ? `No students ${where} have a primary contact email`
+            : `No students ${where} have a school email yet — run "Create Student Emails" first`
           : kind === "parent"
-            ? `Copy the primary contact email for every student in this card (${emails.length}, one per family)`
-            : `Copy the school email of every student in this card (${emails.length}${missing > 0 ? `; ${missing} without one yet` : ""})`
+            ? `Copy the primary contact email for every student ${where} (${emails.length}, one per family)`
+            : `Copy the school email of every student ${where} (${emails.length}${missing > 0 ? `; ${missing} without one yet` : ""})`
       }
     >
-      <Copy className="size-3.5 mr-1" aria-hidden="true" />
+      <Copy
+        className={cn("size-3.5", size === "card" ? "mr-1" : "mr-1.5")}
+        aria-hidden="true"
+      />
       {kind === "parent" ? "Parent emails" : "Student emails"}
+      {size === "default" && emails.length > 0 ? ` (${emails.length})` : ""}
     </Button>
   );
 }
