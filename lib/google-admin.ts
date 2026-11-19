@@ -1,5 +1,6 @@
 import { createSign } from "crypto";
 import { stripNameSuffix } from "@/lib/name-suffix";
+import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
 /**
  * Google Workspace admin client for Chromebook sign-in restriction —
@@ -37,6 +38,11 @@ import { stripNameSuffix } from "@/lib/name-suffix";
  *   - GOOGLE_STUDENT_OU            — optional OU that holds the
  *     per-student OUs (default "/SailFuture Academy/Student",
  *     verified against the live tree)
+ *   - GOOGLE_SENIOR_OU             — optional OU that holds the
+ *     seniors' per-student OUs (default "/SailFuture Academy/Seniors",
+ *     also verified live). A student's account is moved there by hand
+ *     from the School Account card; everything else follows the
+ *     account — see `resolveStudentOuPathForAccount`
  *   - GOOGLE_DEVICE_OU_PARENT      — optional override for where
  *     devices park; defaults to GOOGLE_STUDENT_OU so a student and
  *     their Chromebook share one OU
@@ -71,6 +77,17 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DIRECTORY_BASE = "https://admin.googleapis.com/admin/directory/v1";
 const POLICY_BASE = "https://chromepolicy.googleapis.com/v1";
 const SIGNIN_SCHEMA = "chrome.devices.SignInRestriction";
+/**
+ * The schema's own name for "only the allowlist may sign in", read
+ * off `policySchemas/chrome.devices.SignInRestriction` — the enum is
+ * RESTRICTED_LIST / ANY_USER / NO_USERS, each carrying this prefix.
+ *
+ * This module used to write and compare the bare "RESTRICTED_LIST".
+ * The compare never matched what Google returns, so every org unit
+ * read as unrestricted — including the 245 that were. Writes now use
+ * the schema's exact value; reads accept either spelling.
+ */
+const SIGNIN_RESTRICTED = "ALLOW_NEW_USERS_ENUM_RESTRICTED_LIST";
 
 function cleanEmail(v: string): string {
   return v.trim().split(/\s+/)[0] ?? "";
@@ -149,9 +166,86 @@ export function studentOuPath(): string {
  * `resolveStudentOuPath` before creating or moving anything, since an
  * OU may already exist under the other spelling.
  */
-export function studentOuPathFor(displayName: string): string {
+export function studentOuPathFor(
+  displayName: string,
+  parent: string = studentOuPath()
+): string {
   const name = studentOuName(stripNameSuffix(displayName));
-  return name ? `${studentOuPath()}/${name}` : studentOuPath();
+  return name ? `${parent}/${name}` : parent;
+}
+
+/**
+ * OU that holds the SENIORS' per-student OUs — a second tree beside
+ * the student one, with the same shape: one child OU per student,
+ * named after them, carrying that student's sign-in restriction.
+ *
+ * Default verified live: `/SailFuture Academy/Seniors` exists and was
+ * built by hand, with the senior accounts parked directly in it and
+ * their Chromebooks in the per-student children. Override with
+ * `GOOGLE_SENIOR_OU`; normalized like `studentOuPath`.
+ */
+export function seniorOuPath(): string {
+  const raw = (process.env.GOOGLE_SENIOR_OU ?? "").trim();
+  const path = raw || "/SailFuture Academy/Seniors";
+  return `/${path.replace(/^\/+|\/+$/g, "")}`;
+}
+
+function sameOuPath(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/** True when `path` is `parent` itself or anything beneath it. */
+export function isAtOrUnderOu(path: string, parent: string): boolean {
+  const p = path.trim().toLowerCase();
+  const root = parent.trim().toLowerCase();
+  return p === root || p.startsWith(`${root}/`);
+}
+
+/**
+ * True when `path` is a per-student OU — strictly beneath one of the
+ * parents this app files students under (student, seniors, or the
+ * device-park override).
+ *
+ * This is what "a device we manage" means. It used to be "beneath the
+ * student OU", which stopped being true the moment a senior's
+ * Chromebook sat in the Seniors tree: returning that laptop skipped
+ * the park step as "not ours" and left it locked to the student who
+ * had just handed it in.
+ */
+export function isPerStudentOu(path: string): boolean {
+  return [deviceOuParent(), studentOuPath(), seniorOuPath()].some(
+    (parent) => isAtOrUnderOu(path, parent) && !sameOuPath(path, parent)
+  );
+}
+
+/**
+ * Which tree a student belongs in, read off where their ACCOUNT is.
+ *
+ * Seniors aren't flagged anywhere in our data — an admin moves the
+ * account into the Seniors tree by hand, and that placement is the
+ * record. Reading it back from Google (rather than storing a second
+ * copy that could disagree) is what keeps the account, the sign-in
+ * policy and the Chromebook on one path.
+ *
+ * An account sitting directly in the Seniors OU counts: that is how
+ * the hand-built tree holds them.
+ */
+export function studentOuParentForAccount(
+  accountOuPath: string | null | undefined
+): string {
+  return accountOuPath && isAtOrUnderOu(accountOuPath, seniorOuPath())
+    ? seniorOuPath()
+    : studentOuPath();
+}
+
+/** The form two OU names are compared in: case, runs of spaces and
+ *  apostrophe look-alikes don't make a different student. */
+function foldOuName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(APOSTROPHE_VARIANTS, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -168,22 +262,76 @@ export function studentOuPathFor(displayName: string): string {
  * only when neither exists fall back to creating the suffix-free
  * name. New students converge on one rule; existing ones are left
  * where they are.
+ *
+ * "Already there" is looser than an exact path. The hand-built OUs
+ * also differ from our stored names by a curly apostrophe
+ * ("La’Mya Fulwood") or a doubled space ("Kamya  Green"), and an
+ * exact lookup misses both — so when it does, the parent's children
+ * are listed once and matched on the folded name.
+ *
+ * `parent` picks the tree (student by default, seniors when asked).
+ * `prefer` is the OU the account sits in now: when that is already
+ * one of this student's own, it wins outright, so a student is never
+ * shuffled between two spellings of themselves.
  */
 export async function resolveStudentOuPath(
-  displayName: string
+  displayName: string,
+  opts: { parent?: string; prefer?: string | null } = {}
 ): Promise<string> {
-  const parent = studentOuPath();
+  const parent = opts.parent ?? studentOuPath();
   const names = [
     studentOuName(stripNameSuffix(displayName)),
     studentOuName(displayName),
   ].filter((n, i, all) => n && all.indexOf(n) === i);
   if (names.length === 0) return parent;
+  const folded = new Set(names.map(foldOuName));
+
+  const prefer = (opts.prefer ?? "").trim();
+  if (
+    prefer &&
+    isAtOrUnderOu(prefer, parent) &&
+    !sameOuPath(prefer, parent) &&
+    // Direct children only — a deeper path isn't a per-student OU.
+    !prefer.slice(parent.length + 1).includes("/") &&
+    folded.has(foldOuName(prefer.slice(parent.length + 1)))
+  ) {
+    return prefer;
+  }
 
   for (const name of names) {
     const path = `${parent}/${name}`;
     if (await getOrgUnit(path).catch(() => null)) return path;
   }
+
+  const siblings = await listChildOrgUnits(parent).catch(() => []);
+  const match = siblings.find((ou) => folded.has(foldOuName(ou.name)));
+  if (match) return match.orgUnitPath;
+
   return `${parent}/${names[0]}`;
+}
+
+/**
+ * The student's OU path in whichever tree their account is in — the
+ * one every caller that PLACES something should use.
+ *
+ * The laptop restriction used to resolve by name alone, always under
+ * the student OU. For a senior that put the policy and the Chromebook
+ * in `/…/Student/<Name>` while the account sat in `/…/Seniors`.
+ *
+ * A missing account (not created yet) resolves in the student tree,
+ * which is where it will be created. A FAILED lookup throws rather
+ * than guessing: guessing "student" would quietly move a senior's
+ * laptop into the wrong tree.
+ */
+export async function resolveStudentOuPathForAccount(
+  displayName: string,
+  email: string
+): Promise<string> {
+  const user = email.trim() ? await getWorkspaceUser(email) : null;
+  return resolveStudentOuPath(displayName, {
+    parent: studentOuParentForAccount(user?.orgUnitPath),
+    prefer: user?.orgUnitPath,
+  });
 }
 
 /** Staff emails included in every device allowlist. */
@@ -373,6 +521,29 @@ export async function getOrgUnit(path: string): Promise<OrgUnit | null> {
   };
 }
 
+/** The OUs directly inside `parent`, with their display names. One
+ *  call returns them all — the Directory API doesn't page this list. */
+export async function listChildOrgUnits(
+  parent: string
+): Promise<Array<OrgUnit & { name: string }>> {
+  const res = await googleFetch(
+    `${DIRECTORY_BASE}/customer/my_customer/orgunits?` +
+      new URLSearchParams({ orgUnitPath: parent, type: "children" })
+  );
+  if (!res.ok) await fail(res, `Org unit list (${parent})`);
+  const data = await res.json();
+  const units: Record<string, unknown>[] = Array.isArray(
+    data?.organizationUnits
+  )
+    ? data.organizationUnits
+    : [];
+  return units.map((u) => ({
+    orgUnitId: String(u.orgUnitId ?? ""),
+    orgUnitPath: String(u.orgUnitPath ?? ""),
+    name: String(u.name ?? ""),
+  }));
+}
+
 /** Get-or-create an OU, creating missing ancestors as needed
  *  ("/Student Devices/1-01" creates both levels on first use). */
 export async function ensureOrgUnit(path: string): Promise<OrgUnit> {
@@ -420,7 +591,7 @@ function policyTarget(orgUnitId: string): { targetResource: string } {
 }
 
 export interface SignInRestriction {
-  /** True when the OU's effective policy is RESTRICTED_LIST. */
+  /** True when the OU's effective policy is the restricted list. */
   restricted: boolean;
   allowlist: string[];
 }
@@ -449,7 +620,9 @@ export async function getSignInRestriction(
     ? value.userAllowlist.filter((e: unknown): e is string => typeof e === "string")
     : [];
   return {
-    restricted: value?.deviceAllowNewUsers === "RESTRICTED_LIST",
+    restricted:
+      typeof value?.deviceAllowNewUsers === "string" &&
+      value.deviceAllowNewUsers.endsWith("RESTRICTED_LIST"),
     allowlist,
   };
 }
@@ -471,7 +644,7 @@ export async function setSignInRestriction(
             policyValue: {
               policySchema: SIGNIN_SCHEMA,
               value: {
-                deviceAllowNewUsers: "RESTRICTED_LIST",
+                deviceAllowNewUsers: SIGNIN_RESTRICTED,
                 userAllowlist: allowlist,
               },
             },

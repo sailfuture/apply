@@ -5,7 +5,8 @@ import { buildLaptopLinkResolver } from "@/lib/laptop-links";
 import {
   deviceOuParent,
   ensureOrgUnit,
-  resolveStudentOuPath,
+  isPerStudentOu,
+  resolveStudentOuPathForAccount,
   studentOuName,
   clearSignInRestriction,
   getChromeDeviceBySerial,
@@ -28,8 +29,10 @@ import { placeLaptopInStudentOu } from "@/lib/laptop-google";
  *   POST   → restrict the device to the current holder's school
  *            account (+ GOOGLE_DEVICE_EXTRA_ALLOWLIST staff): ensure
  *            the student's own OU (`/SailFuture Academy/Student/<Name>`
- *            — the same one their Workspace account is placed in,
- *            resolved via `resolveStudentOuPath`), apply the policy
+ *            or `/SailFuture Academy/Seniors/<Name>` for a student
+ *            whose account is in the Seniors tree — the same one
+ *            their Workspace account is placed in, resolved via
+ *            `resolveStudentOuPathForAccount`), apply the policy
  *            there, move the device in. Requires an open assignment
  *            linked to a student with a school_email.
  *   DELETE → lift the restriction: revert the student OU's policy to
@@ -198,8 +201,9 @@ export async function DELETE(
     }
 
     const parent = deviceOuParent();
-    if (!device.orgUnitPath.startsWith(`${parent}/`)) {
-      // Not in a per-device OU we manage — nothing to lift.
+    if (!isPerStudentOu(device.orgUnitPath)) {
+      // Not in a per-student OU we manage (either tree) — nothing to
+      // lift.
       return NextResponse.json(await buildStatus(id));
     }
 
@@ -292,7 +296,9 @@ async function buildStatus(laptopId: number): Promise<LaptopGoogleStatus> {
   // so the path shown is the path it will actually move to.
   if (holder?.email) {
     base.targetOuPath = studentOuName(holder.name)
-      ? await resolveStudentOuPath(holder.name).catch(() => "")
+      ? await resolveStudentOuPathForAccount(holder.name, holder.email).catch(
+          () => ""
+        )
       : `${deviceOuParent()}/${holder.email.split("@")[0] || serial}`;
   }
 
@@ -305,7 +311,7 @@ async function buildStatus(laptopId: number): Promise<LaptopGoogleStatus> {
       status: device.status,
       recentUser: device.recentUser,
     };
-    base.managed = device.orgUnitPath.startsWith(`${deviceOuParent()}/`);
+    base.managed = isPerStudentOu(device.orgUnitPath);
 
     const ou = await getOrgUnit(device.orgUnitPath).catch(() => null);
     if (ou) {

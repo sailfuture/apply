@@ -10,11 +10,16 @@ import {
   getOrgUnit,
   getWorkspaceUser,
   isGoogleAdminConfigured,
+  isAtOrUnderOu,
   moveWorkspaceUserToOu,
   resolveStudentOuPath,
+  seniorOuPath,
+  studentOuParentForAccount,
   studentOuPath,
   studentOuPathFor,
 } from "@/lib/google-admin";
+import { buildLaptopLinkResolver, NO_LAPTOP_LINKS } from "@/lib/laptop-links";
+import { placeLaptopInStudentOu } from "@/lib/laptop-google";
 import {
   syncStudentPhotoToGoogle,
   type GooglePhotoSync,
@@ -71,6 +76,18 @@ export interface StudentGoogleAccountStatus {
   signInRestricted: boolean;
   /** Who that OU currently lets sign in. Empty when unknown. */
   signInAllowlist: string[];
+  /** True when the account sits in the Seniors tree (directly in the
+   *  Seniors OU, or in the student's own OU beneath it). When it does,
+   *  `targetOrgUnitPath` is their OU THERE — the card must never offer
+   *  a "move to their own org unit" that drags a senior back. */
+  inSeniors: boolean;
+  /** The Seniors OU itself, named in the move dialog. */
+  seniorParentPath: string;
+  /** False when the Seniors OU isn't in the Workspace tree — the move
+   *  is offered disabled, with the reason, rather than failing late. */
+  seniorParentExists: boolean;
+  /** The student OU, named in the "move back" dialog. */
+  studentParentPath: string;
   /** Set when configured but Google couldn't be reached — the card
    *  shows this instead of implying the account is missing. */
   error?: string;
@@ -102,6 +119,10 @@ export async function GET(
       inOwnOrgUnit: false,
       signInRestricted: false,
       signInAllowlist: [],
+      inSeniors: false,
+      seniorParentPath: seniorOuPath(),
+      seniorParentExists: false,
+      studentParentPath: studentOuPath(),
     };
     if (!base.configured || !email) return NextResponse.json(base);
 
@@ -114,17 +135,27 @@ export async function GET(
       // rather than assumed — a student whose OU already exists under
       // the other spelling is ALREADY in their own OU, and reporting
       // otherwise would offer a "move" that creates a second one.
-      const [user, parentOu, resolved] = await Promise.all([
+      //
+      // WHICH parent comes from where the account is: a senior's own
+      // OU is the one under Seniors, so the account is looked up
+      // first and the resolve waits for it.
+      const [user, studentParent, seniorParent] = await Promise.all([
         getWorkspaceUser(email),
         getOrgUnit(studentOuPath()).catch(() => null),
-        student
-          ? resolveStudentOuPath(displayName(student)).catch(
-              () => base.targetOrgUnitPath
-            )
-          : Promise.resolve(base.targetOrgUnitPath),
+        getOrgUnit(seniorOuPath()).catch(() => null),
       ]);
-      base.targetOrgUnitExists = parentOu !== null;
-      base.targetOrgUnitPath = resolved;
+      base.seniorParentExists = seniorParent !== null;
+      base.inSeniors =
+        !!user && isAtOrUnderOu(user.orgUnitPath, seniorOuPath());
+      base.targetOrgUnitExists =
+        (base.inSeniors ? seniorParent : studentParent) !== null;
+      if (student) {
+        const parent = studentOuParentForAccount(user?.orgUnitPath);
+        base.targetOrgUnitPath = await resolveStudentOuPath(
+          displayName(student),
+          { parent, prefer: user?.orgUnitPath }
+        ).catch(() => studentOuPathFor(displayName(student), parent));
+      }
       if (user) {
         base.exists = true;
         base.suspended = user.suspended;
@@ -281,9 +312,22 @@ export async function POST(
  * restriction has no per-student org unit to attach to. Creates the
  * OU if it isn't there and moves only `orgUnitPath` — nothing else on
  * the account is touched.
+ *
+ *   PATCH { target: "seniors" } → move them to the Seniors tree
+ *   PATCH { target: "student" } → move them back
+ *
+ * With a `target` the account changes TREE: into the student's own OU
+ * under `/SailFuture Academy/Seniors` (or back under the student OU).
+ * That OU is armed with the same sign-in restriction — this student
+ * plus the IT allowlist — and a Chromebook they hold follows them
+ * into it, so the laptop stays locked to them across the move. With
+ * no `target` the account stays in whichever tree it is already in.
+ *
+ * The OU they leave is kept, policy and all: student OUs are never
+ * deleted, and an armed OU with no device in it restricts nothing.
  */
 export async function PATCH(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -315,27 +359,57 @@ export async function PATCH(
       );
     }
 
-    const parentPath = studentOuPath();
+    const body = (await req.json().catch(() => null)) as {
+      target?: unknown;
+    } | null;
+    const target =
+      body?.target === "seniors" || body?.target === "student"
+        ? body.target
+        : null;
+
+    // Verified, never created — same rule as the student OU on create.
+    // Conjuring "/SailFuture Academy/Seniors" out of a typo'd env var
+    // would be a structural change to someone's directory.
+    const parentPath =
+      target === "seniors"
+        ? seniorOuPath()
+        : target === "student"
+          ? studentOuPath()
+          : studentOuParentForAccount(user.orgUnitPath);
     if (!(await getOrgUnit(parentPath).catch(() => null))) {
+      const isSenior = parentPath === seniorOuPath();
       return NextResponse.json(
         {
-          error: `The student org unit "${parentPath}" doesn't exist in Workspace. Create it, or set GOOGLE_STUDENT_OU to the right path.`,
+          error: `The ${isSenior ? "Seniors" : "student"} org unit "${parentPath}" doesn't exist in Workspace. Create it, or set ${
+            isSenior ? "GOOGLE_SENIOR_OU" : "GOOGLE_STUDENT_OU"
+          } to the right path.`,
         },
         { status: 409 }
       );
     }
-    const orgUnitPath = await resolveStudentOuPath(displayName(student));
+    const orgUnitPath = await resolveStudentOuPath(displayName(student), {
+      parent: parentPath,
+      prefer: user.orgUnitPath,
+    });
     const ou = await ensureOrgUnit(orgUnitPath);
+
+    // Armed BEFORE anything moves in. Re-arming on every move matters
+    // on its own, too: the allowlist names an address, so a student
+    // whose email changed leaves a stale one behind — this is what
+    // corrects an OU still allowlisting last year's address.
+    const signInRestricted = await armSignInRestriction(ou.orgUnitId, email);
     const moved = await moveWorkspaceUserToOu(email, orgUnitPath);
 
     return NextResponse.json({
       ok: true,
       email: moved.primaryEmail,
       orgUnitPath: moved.orgUnitPath || orgUnitPath,
-      // Re-arm on a move too: the allowlist names an address, so a
-      // student whose email changed leaves a stale one behind. This is
-      // what corrects an OU still allowlisting last year's address.
-      signInRestricted: await armSignInRestriction(ou.orgUnitId, email),
+      signInRestricted,
+      // Only a change of tree moves the laptop: within one tree the
+      // device's OU is the same path before and after.
+      laptopNote: target
+        ? await bringLaptopAlong(id, displayName(student), email, ou.orgUnitPath)
+        : "",
     });
   } catch (err) {
     console.error("[/api/admin/students/[id]/google-account] move failed:", err);
@@ -376,6 +450,81 @@ async function armSignInRestriction(
       err
     );
     return false;
+  }
+}
+
+/**
+ * Move the Chromebook(s) this student holds into the OU their account
+ * was just moved to, and say what happened in one sentence for the
+ * toast ("" = they hold no laptop, nothing worth saying).
+ *
+ * `placeLaptopInStudentOu` is handed the OU the account just moved
+ * into; it sets the policy there and only then moves the device —
+ * the same sequence as the Restrict button. Left behind, the
+ * laptop would stay in the old tree: still locked to the student by
+ * the old OU's policy, but split from their account and showing as
+ * "moves to…" on the Laptops page until someone noticed.
+ *
+ * Holders are found the way the assign guard finds them — bridge
+ * column first, then the ops UUID the RFID check-in leaves, which is
+ * how most of the fleet is checked out.
+ *
+ * Best-effort: the account move is done by the time this runs, so a
+ * laptop that couldn't follow is reported, not thrown.
+ */
+async function bringLaptopAlong(
+  studentId: number,
+  studentName: string,
+  email: string,
+  ouPath: string
+): Promise<string> {
+  try {
+    const [assignments, opsStudents, allStudents] = await Promise.all([
+      xano.laptopAssignments.getAll(),
+      xano.opsStudents.getAll().catch(() => null),
+      xano.students.getAll().catch(() => null),
+    ]);
+    const links =
+      opsStudents && allStudents
+        ? buildLaptopLinkResolver(opsStudents, allStudents)
+        : NO_LAPTOP_LINKS;
+    const held = assignments.filter(
+      (a) =>
+        !a.returned_date &&
+        (Number(a.enrolled_students_id) === studentId ||
+          links.resolve(a.students_id)?.enrolled_students_id === studentId)
+    );
+    if (held.length === 0) return "";
+
+    const notes: string[] = [];
+    for (const assignment of held) {
+      const laptop = await xano.laptops
+        .getById(Number(assignment.laptops_id))
+        .catch(() => null);
+      const result = await placeLaptopInStudentOu({
+        serial: (laptop?.serial_number ?? "").trim(),
+        studentName,
+        studentEmail: email,
+        onlyIfManaged: true,
+        ouPath,
+      });
+      notes.push(
+        result.status === "placed"
+          ? "Their laptop moved with them."
+          : result.status === "skipped"
+            ? `Their laptop didn't move: ${result.detail}.`
+            : "Their laptop was already there."
+      );
+    }
+    return notes.join(" ");
+  } catch (err) {
+    console.error(
+      "[/api/admin/students/[id]/google-account] laptop didn't follow:",
+      err
+    );
+    return `Their laptop didn't move: ${
+      err instanceof Error ? err.message : "Google Admin call failed"
+    }. Restrict it again on the Laptops page.`;
   }
 }
 

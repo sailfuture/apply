@@ -4,8 +4,9 @@ import {
   extraAllowlist,
   getChromeDeviceBySerial,
   isGoogleAdminConfigured,
+  isPerStudentOu,
   moveChromeDeviceToOu,
-  resolveStudentOuPath,
+  resolveStudentOuPathForAccount,
   setSignInRestriction,
   studentOuName,
 } from "@/lib/google-admin";
@@ -54,15 +55,28 @@ function skip(reason: SkipReason, detail: string): LaptopOuResult {
 /**
  * Restrict a device to one student and move it into their OU.
  *
- * The OU is the student's own (`/SailFuture Academy/Student/<Name>`),
- * resolved through the same helper that places their Workspace
- * account, so account and device land in one place. A student whose
- * name gives no usable OU label falls back to their email local-part.
+ * The OU is the student's own (`/SailFuture Academy/Student/<Name>`,
+ * or `/SailFuture Academy/Seniors/<Name>` once their account has been
+ * moved to the Seniors tree), resolved through the same helper that
+ * places their Workspace account, so account and device land in one
+ * place. A student whose name gives no usable OU label falls back to
+ * their email local-part.
+ *
+ * `onlyIfManaged` is for a device FOLLOWING its student between
+ * trees: it moves a Chromebook that already sits in a per-student OU
+ * and leaves one that doesn't. A laptop parked in the shared pool was
+ * either never restricted or deliberately un-restricted, and moving a
+ * student's account isn't the moment to change that. That caller
+ * also passes `ouPath` — the OU it just moved the account into —
+ * rather than have this read the account's placement back from
+ * Google a moment after writing it.
  */
 export async function placeLaptopInStudentOu(input: {
   serial: string;
   studentName: string;
   studentEmail: string;
+  onlyIfManaged?: boolean;
+  ouPath?: string;
 }): Promise<LaptopOuResult> {
   const serial = input.serial.trim();
   const email = input.studentEmail.trim().toLowerCase();
@@ -86,9 +100,18 @@ export async function placeLaptopInStudentOu(input: {
     );
   }
 
-  const ouPath = studentOuName(input.studentName)
-    ? await resolveStudentOuPath(input.studentName)
-    : `${deviceOuParent()}/${email.split("@")[0] || serial}`;
+  if (input.onlyIfManaged && !isPerStudentOu(device.orgUnitPath)) {
+    return skip(
+      "not-managed",
+      `it is in ${device.orgUnitPath || "/"}, not a student org unit, so it was left there`
+    );
+  }
+
+  const ouPath =
+    input.ouPath?.trim() ||
+    (studentOuName(input.studentName)
+      ? await resolveStudentOuPathForAccount(input.studentName, email)
+      : `${deviceOuParent()}/${email.split("@")[0] || serial}`);
   const ou = await ensureOrgUnit(ouPath);
 
   // Policy before move — the device must never sit in its OU
@@ -129,8 +152,10 @@ export async function parkLaptop(serial: string): Promise<LaptopOuResult> {
   }
 
   const parent = deviceOuParent();
-  if (!device.orgUnitPath.startsWith(`${parent}/`)) {
+  if (!isPerStudentOu(device.orgUnitPath)) {
     // Already parked, or somewhere we didn't put it — leave it be.
+    // Per-student means either tree: a senior's laptop comes back
+    // from `/…/Seniors/<Name>` and has to be released the same way.
     return skip("not-managed", `Device is in ${device.orgUnitPath}`);
   }
 
