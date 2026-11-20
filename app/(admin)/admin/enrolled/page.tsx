@@ -54,6 +54,7 @@ import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog"
 import { ExportScholarshipPdfButton } from "@/components/admin/export-scholarship-pdf-button";
 import { SchoolAccountBackfillDialog } from "@/components/admin/school-account-backfill-dialog";
 import { GooglePhotoSyncDialog } from "@/components/admin/google-photo-sync-dialog";
+import { SeniorsMoveDialog } from "@/components/admin/seniors-move-dialog";
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { ToddleSyncAllDialog } from "@/components/admin/toddle-sync-all-dialog";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
@@ -1194,6 +1195,15 @@ function EnrolledRoster({
               <CardAction className="row-span-1 self-center flex items-center gap-1.5">
                 <CopyEmailsButton rows={group.rows} kind="parent" />
                 <CopyEmailsButton rows={group.rows} kind="student" />
+                {/* 12th grade only, and only on the Enrolled roster:
+                    seniors' Google accounts live in their own org-unit
+                    tree. Covers the students in the card, like the
+                    copy buttons beside it. */}
+                {title === "Enrolled" && parseInt(group.grade, 10) === 12 ? (
+                  <SeniorsMoveDialog
+                    studentIds={group.rows.map((r) => r.student_id)}
+                  />
+                ) : null}
                 <EnrolledExportDialog
                   yearId={yearId}
                   yearName={yearName}

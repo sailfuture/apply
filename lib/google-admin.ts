@@ -273,10 +273,18 @@ function foldOuName(name: string): string {
  * `prefer` is the OU the account sits in now: when that is already
  * one of this student's own, it wins outright, so a student is never
  * shuffled between two spellings of themselves.
+ *
+ * `children` is the parent's child list when the caller already has
+ * it (a bulk run lists it once): the same exact-then-folded match is
+ * then done in memory, with no lookups per student.
  */
 export async function resolveStudentOuPath(
   displayName: string,
-  opts: { parent?: string; prefer?: string | null } = {}
+  opts: {
+    parent?: string;
+    prefer?: string | null;
+    children?: Array<{ name: string; orgUnitPath: string }>;
+  } = {}
 ): Promise<string> {
   const parent = opts.parent ?? studentOuPath();
   const names = [
@@ -296,6 +304,15 @@ export async function resolveStudentOuPath(
     folded.has(foldOuName(prefer.slice(parent.length + 1)))
   ) {
     return prefer;
+  }
+
+  if (opts.children) {
+    const exact = names
+      .map((name) => opts.children?.find((ou) => ou.name === name))
+      .find(Boolean);
+    const match =
+      exact ?? opts.children.find((ou) => folded.has(foldOuName(ou.name)));
+    return match?.orgUnitPath ?? `${parent}/${names[0]}`;
   }
 
   for (const name of names) {

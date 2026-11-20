@@ -4,27 +4,28 @@ import { xano } from "@/lib/xano";
 import {
   createWorkspaceUser,
   ensureOrgUnit,
-  extraAllowlist,
   getSignInRestriction,
-  setSignInRestriction,
   getOrgUnit,
   getWorkspaceUser,
   isGoogleAdminConfigured,
   isAtOrUnderOu,
-  moveWorkspaceUserToOu,
   resolveStudentOuPath,
   seniorOuPath,
   studentOuParentForAccount,
   studentOuPath,
   studentOuPathFor,
 } from "@/lib/google-admin";
-import { buildLaptopLinkResolver, NO_LAPTOP_LINKS } from "@/lib/laptop-links";
-import { placeLaptopInStudentOu } from "@/lib/laptop-google";
+import {
+  armSignInRestriction,
+  bringLaptopAlong,
+  loadHeldLaptopIndex,
+  moveAccountIntoOu,
+  studentOuDisplayName as displayName,
+} from "@/lib/google-student-ou";
 import {
   syncStudentPhotoToGoogle,
   type GooglePhotoSync,
 } from "@/lib/google-student-photo";
-import type { XanoStudent } from "@/lib/xano";
 
 /**
  * Create the student's Google Workspace account from the credentials
@@ -391,149 +392,34 @@ export async function PATCH(
       parent: parentPath,
       prefer: user.orgUnitPath,
     });
-    const ou = await ensureOrgUnit(orgUnitPath);
-
-    // Armed BEFORE anything moves in. Re-arming on every move matters
-    // on its own, too: the allowlist names an address, so a student
-    // whose email changed leaves a stale one behind — this is what
-    // corrects an OU still allowlisting last year's address.
-    const signInRestricted = await armSignInRestriction(ou.orgUnitId, email);
-    const moved = await moveWorkspaceUserToOu(email, orgUnitPath);
+    // Ensure the OU, arm it, then move the account in — shared with
+    // the 12th grade card's bulk move (lib/google-student-ou.ts).
+    const moved = await moveAccountIntoOu(email, orgUnitPath);
 
     return NextResponse.json({
       ok: true,
-      email: moved.primaryEmail,
-      orgUnitPath: moved.orgUnitPath || orgUnitPath,
-      signInRestricted,
+      email: moved.email,
+      orgUnitPath: moved.orgUnitPath,
+      signInRestricted: moved.signInRestricted,
       // Only a change of tree moves the laptop: within one tree the
       // device's OU is the same path before and after.
       laptopNote: target
-        ? await bringLaptopAlong(id, displayName(student), email, ou.orgUnitPath)
+        ? await bringLaptopAlong({
+            // Handed over still loading: it is awaited inside, so a
+            // roster outage reads as "laptop didn't move", not as a
+            // failed account move.
+            held: loadHeldLaptopIndex(),
+            studentId: id,
+            studentName: displayName(student),
+            email,
+            ouPath: moved.ouPath,
+          })
         : "",
     });
   } catch (err) {
     console.error("[/api/admin/students/[id]/google-account] move failed:", err);
     return NextResponse.json({ error: hint(err) }, { status: 502 });
   }
-}
-
-/**
- * Arm the student's OU so only they (plus IT) can sign in on a
- * Chromebook placed there.
- *
- * The restriction is a DEVICE policy: it does nothing until a device
- * is moved into the OU, and the Laptops page re-applies it when one
- * is. Setting it here means the OU is already live the moment a
- * Chromebook lands — rather than depending on someone remembering to
- * press Restrict, which is exactly how this org ended up with OUs
- * carrying a correct allowlist and `deviceAllowNewUsers` never
- * switched to RESTRICTED_LIST.
- *
- * Best-effort on purpose. The account is already created by the time
- * this runs; failing the whole request over a policy write would
- * report "couldn't create" for an account that exists. The caller
- * passes the result on so the UI can say what did and didn't land.
- */
-async function armSignInRestriction(
-  orgUnitId: string,
-  email: string
-): Promise<boolean> {
-  try {
-    await setSignInRestriction(orgUnitId, [
-      email,
-      ...extraAllowlist().filter((e) => e !== email),
-    ]);
-    return true;
-  } catch (err) {
-    console.error(
-      "[/api/admin/students/[id]/google-account] sign-in policy not applied:",
-      err
-    );
-    return false;
-  }
-}
-
-/**
- * Move the Chromebook(s) this student holds into the OU their account
- * was just moved to, and say what happened in one sentence for the
- * toast ("" = they hold no laptop, nothing worth saying).
- *
- * `placeLaptopInStudentOu` is handed the OU the account just moved
- * into; it sets the policy there and only then moves the device —
- * the same sequence as the Restrict button. Left behind, the
- * laptop would stay in the old tree: still locked to the student by
- * the old OU's policy, but split from their account and showing as
- * "moves to…" on the Laptops page until someone noticed.
- *
- * Holders are found the way the assign guard finds them — bridge
- * column first, then the ops UUID the RFID check-in leaves, which is
- * how most of the fleet is checked out.
- *
- * Best-effort: the account move is done by the time this runs, so a
- * laptop that couldn't follow is reported, not thrown.
- */
-async function bringLaptopAlong(
-  studentId: number,
-  studentName: string,
-  email: string,
-  ouPath: string
-): Promise<string> {
-  try {
-    const [assignments, opsStudents, allStudents] = await Promise.all([
-      xano.laptopAssignments.getAll(),
-      xano.opsStudents.getAll().catch(() => null),
-      xano.students.getAll().catch(() => null),
-    ]);
-    const links =
-      opsStudents && allStudents
-        ? buildLaptopLinkResolver(opsStudents, allStudents)
-        : NO_LAPTOP_LINKS;
-    const held = assignments.filter(
-      (a) =>
-        !a.returned_date &&
-        (Number(a.enrolled_students_id) === studentId ||
-          links.resolve(a.students_id)?.enrolled_students_id === studentId)
-    );
-    if (held.length === 0) return "";
-
-    const notes: string[] = [];
-    for (const assignment of held) {
-      const laptop = await xano.laptops
-        .getById(Number(assignment.laptops_id))
-        .catch(() => null);
-      const result = await placeLaptopInStudentOu({
-        serial: (laptop?.serial_number ?? "").trim(),
-        studentName,
-        studentEmail: email,
-        onlyIfManaged: true,
-        ouPath,
-      });
-      notes.push(
-        result.status === "placed"
-          ? "Their laptop moved with them."
-          : result.status === "skipped"
-            ? `Their laptop didn't move: ${result.detail}.`
-            : "Their laptop was already there."
-      );
-    }
-    return notes.join(" ");
-  } catch (err) {
-    console.error(
-      "[/api/admin/students/[id]/google-account] laptop didn't follow:",
-      err
-    );
-    return `Their laptop didn't move: ${
-      err instanceof Error ? err.message : "Google Admin call failed"
-    }. Restrict it again on the Laptops page.`;
-  }
-}
-
-/** The name the OU is labelled with — the student's full stored name,
- *  suffix included, matching the OUs already in the tree
- *  ("Craig Mebane Jr."). Unlike the email and the Toddle push, an OU
- *  label is for a human reading the admin console. */
-function displayName(student: XanoStudent): string {
-  return `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim();
 }
 
 /** Name the two failures that actually happen; otherwise pass
