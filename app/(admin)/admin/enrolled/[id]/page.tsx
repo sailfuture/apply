@@ -1198,13 +1198,23 @@ function SchoolAccountCard({
               Admin only
             </span>
           </CardTitle>
-          <CardEditToggle
-            editing={editing}
-            saving={saving}
-            onEdit={enterEdit}
-            onCancel={() => setEditing(false)}
-            onSave={() => void runSave()}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* Out of the way while editing: the address being moved
+                is the SAVED one, not whatever is in the draft. */}
+            {!editing && student.school_email ? (
+              <OrgUnitTreeButton
+                studentId={student.id}
+                email={student.school_email}
+              />
+            ) : null}
+            <CardEditToggle
+              editing={editing}
+              saving={saving}
+              onEdit={enterEdit}
+              onCancel={() => setEditing(false)}
+              onSave={() => void runSave()}
+            />
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4 py-5 bg-white">
@@ -1524,49 +1534,6 @@ function CreateGoogleAccountRow({
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
   const [moving, setMoving] = useState(false);
-  // Which tree the open confirm dialog would move the account to.
-  const [treeTarget, setTreeTarget] = useState<"seniors" | "student" | null>(
-    null
-  );
-  const [treeMoving, setTreeMoving] = useState(false);
-
-  /** Move the account between the student tree and the Seniors tree.
-   *  Lands in the student's own org unit there, armed with the same
-   *  sign-in restriction, and a laptop they hold follows them. Asks
-   *  first, unlike `runMove`: changing tree changes which Workspace
-   *  policies apply to the student, and can move a device. */
-  async function runTreeMove(target: "seniors" | "student") {
-    if (treeMoving) return;
-    setTreeMoving(true);
-    try {
-      const res = await fetch(
-        `/api/admin/students/${studentId}/google-account`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ target }),
-        }
-      );
-      const payload = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(payload?.error ?? `Failed (${res.status})`);
-      // Hold the busy state until the card has re-read Google, so the
-      // dialog closes onto the new org unit rather than the old one.
-      await mutate();
-      toast.success(
-        `Moved to ${payload?.orgUnitPath ?? "their org unit"}` +
-          (payload?.signInRestricted === false
-            ? " — but the sign-in restriction couldn't be applied."
-            : ".") +
-          (payload?.laptopNote ? ` ${payload.laptopNote}` : "")
-      );
-      setTreeTarget(null);
-    } catch (err) {
-      console.error("[CreateGoogleAccountRow.runTreeMove]", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't move.");
-    } finally {
-      setTreeMoving(false);
-    }
-  }
 
   /** Put an existing account into the student's own OU (creating that
    *  OU if needed). No confirm dialog: it moves one account between
@@ -1703,73 +1670,6 @@ function CreateGoogleAccountRow({
             </span>
           </div>
         ) : null}
-
-        {/* Seniors live in a second tree with the same shape. Moving
-            there is a manual call per student — nothing in our data
-            says who is a senior, the placement IS the record. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="bg-white"
-            disabled={
-              treeMoving || (!data.inSeniors && !data.seniorParentExists)
-            }
-            onClick={() => setTreeTarget(data.inSeniors ? "student" : "seniors")}
-          >
-            {data.inSeniors ? "Move back to Student" : "Move to Seniors"}
-          </Button>
-          {!data.inSeniors && !data.seniorParentExists ? (
-            <span className="text-xs text-amber-700">
-              <span className="font-mono">{data.seniorParentPath}</span>{" "}
-              isn&rsquo;t in Workspace — create it there first.
-            </span>
-          ) : null}
-        </div>
-
-        <AlertDialog
-          open={treeTarget !== null}
-          onOpenChange={(o) => !treeMoving && !o && setTreeTarget(null)}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {treeTarget === "student"
-                  ? "Move this account back to Student?"
-                  : "Move this account to Seniors?"}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                <span className="font-mono">{email}</span> moves into their
-                own org unit under{" "}
-                <span className="font-mono">
-                  {treeTarget === "student"
-                    ? data.studentParentPath
-                    : data.seniorParentPath}
-                </span>
-                , created if it doesn&rsquo;t exist. That org unit only
-                lets this student sign in on a laptop, and a laptop they
-                have checked out moves with them. Their password and
-                mailbox don&rsquo;t change.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={treeMoving}>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                disabled={treeMoving}
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (treeTarget) void runTreeMove(treeTarget);
-                }}
-              >
-                {treeMoving ? (
-                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                ) : null}
-                {treeTarget === "student" ? "Move to Student" : "Move to Seniors"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
       </div>
     );
   }
@@ -1852,6 +1752,146 @@ function CreateGoogleAccountRow({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/**
+ * "Move to Seniors" / "Move back to Student" — sits in the School
+ * Account card's header, beside Edit.
+ *
+ * Seniors live in a second org-unit tree with the same shape as the
+ * student one. Moving there is a manual call per student: nothing in
+ * our data says who is a senior, the placement IS the record. The
+ * account lands in the student's own org unit in that tree, armed
+ * with the same sign-in restriction, and a laptop they hold follows.
+ * It asks first — changing tree changes which Workspace policies
+ * apply to the student, and can move a device.
+ *
+ * Reads the same SWR key as `CreateGoogleAccountRow`, so the two
+ * share one request and the status line below re-renders from this
+ * button's `mutate`. Renders nothing until an account exists: there
+ * is nothing to move, and the row below already offers to create it.
+ */
+function OrgUnitTreeButton({
+  studentId,
+  email,
+}: {
+  studentId: number;
+  email: string;
+}) {
+  const { data, mutate } = useSWR<StudentGoogleAccountStatus>(
+    `/api/admin/students/${studentId}/google-account`,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  // Which tree the open confirm dialog would move the account to.
+  const [target, setTarget] = useState<"seniors" | "student" | null>(null);
+  const [moving, setMoving] = useState(false);
+
+  async function runMove(to: "seniors" | "student") {
+    if (moving) return;
+    setMoving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/students/${studentId}/google-account`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target: to }),
+        }
+      );
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(payload?.error ?? `Failed (${res.status})`);
+      // Hold the busy state until the card has re-read Google, so the
+      // dialog closes onto the new org unit rather than the old one.
+      await mutate();
+      toast.success(
+        `Moved to ${payload?.orgUnitPath ?? "their org unit"}` +
+          (payload?.signInRestricted === false
+            ? " — but the sign-in restriction couldn't be applied."
+            : ".") +
+          (payload?.laptopNote ? ` ${payload.laptopNote}` : "")
+      );
+      setTarget(null);
+    } catch (err) {
+      console.error("[OrgUnitTreeButton.runMove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't move.");
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  if (!data || !data.configured || data.error || !data.exists) return null;
+
+  const seniorsMissing = !data.inSeniors && !data.seniorParentExists;
+
+  return (
+    <>
+      {/* The reason a dead button is dead, where the pointer is. On a
+          wrapper because a disabled Button ignores the pointer, and
+          its own `title` would never show. */}
+      <span
+        title={
+          seniorsMissing
+            ? `${data.seniorParentPath} isn't in Workspace — create it there first.`
+            : undefined
+        }
+      >
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="bg-white"
+          disabled={moving || seniorsMissing}
+          onClick={() => setTarget(data.inSeniors ? "student" : "seniors")}
+        >
+          {data.inSeniors ? "Move back to Student" : "Move to Seniors"}
+        </Button>
+      </span>
+
+      <AlertDialog
+        open={target !== null}
+        onOpenChange={(o) => !moving && !o && setTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {target === "student"
+                ? "Move this account back to Student?"
+                : "Move this account to Seniors?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-mono">{email}</span> moves into their
+              own org unit under{" "}
+              <span className="font-mono">
+                {target === "student"
+                  ? data.studentParentPath
+                  : data.seniorParentPath}
+              </span>
+              , created if it doesn&rsquo;t exist. That org unit only lets
+              this student sign in on a laptop, and a laptop they have
+              checked out moves with them. Their password and mailbox
+              don&rsquo;t change.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={moving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={moving}
+              onClick={(e) => {
+                e.preventDefault();
+                if (target) void runMove(target);
+              }}
+            >
+              {moving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              {target === "student" ? "Move to Student" : "Move to Seniors"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
