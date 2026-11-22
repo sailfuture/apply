@@ -2,16 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { LoadingScreen } from "@/components/loading-screen";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import {
@@ -178,32 +168,12 @@ export default function ApplyIndexPage() {
     .filter((n): n is string => !!n);
 
   if (loading) {
+    // Same full-height box as the loaders on either side of this page
+    // (`/` before it, the year overview after), so the spinner stays put.
     return (
-      <>
-        <header className="flex h-16 shrink-0 items-center gap-2">
-          <div className="flex items-center gap-2 px-4">
-            <SidebarTrigger className="-ml-1" />
-            <Separator
-              orientation="vertical"
-              className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-            />
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem className="hidden md:block">
-                  <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator className="hidden md:block" />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>Applications</BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
-          </div>
-        </header>
-        <div className="flex min-h-[40vh] items-center justify-center">
-          <LoadingScreen />
-        </div>
-      </>
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
+        <LoadingScreen />
+      </div>
     );
   }
 
@@ -221,30 +191,12 @@ export default function ApplyIndexPage() {
     );
   }
 
+  // Rendered on the clean shell now (see app/(dashboard)/layout.tsx), so
+  // there is no sidebar trigger or breadcrumb header: the global header
+  // above is the only chrome, as on /welcome and the year overview.
   return (
     <>
-      <header className="flex h-16 shrink-0 items-center gap-2">
-        <div className="flex items-center gap-2 px-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator
-            orientation="vertical"
-            className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-          />
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">
-                <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>Choose a School Year</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-        </div>
-      </header>
-
-      <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
+      <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-4 py-10">
         <div>
           <h1 className="text-2xl font-semibold">
             Which school year are you applying for?

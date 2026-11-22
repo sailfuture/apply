@@ -104,6 +104,11 @@ export default function WelcomePage() {
     e.preventDefault();
     setSubmitting(true);
     setError("");
+    // Set once the family is created and the page is on its way to `/`.
+    // The button then stays on "Creating..." through the navigation: it
+    // used to come back live for about a second, and a second click
+    // posted again and showed "You already belong to a family".
+    let leaving = false;
 
     try {
       const res = await fetch("/api/families", {
@@ -128,6 +133,7 @@ export default function WelcomePage() {
       });
 
       if (res.ok) {
+        leaving = true;
         router.replace("/");
       } else {
         const body = await res.json().catch(() => null);
@@ -136,7 +142,7 @@ export default function WelcomePage() {
     } catch {
       setError("Network error — please try again.");
     } finally {
-      setSubmitting(false);
+      if (!leaving) setSubmitting(false);
     }
   }
 

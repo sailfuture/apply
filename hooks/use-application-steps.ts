@@ -156,7 +156,19 @@ export function useApplicationSteps(yearId: number) {
 
   // Side-nav avoids flashing grey-then-green by waiting for the
   // scholarship row to settle alongside the core fetches.
-  const stepsLoading = loading || scholarshipLoading;
+  //
+  // The progress rows count too: they are what say "complete". Leaving
+  // them out drew every step as not-started / in-progress and then
+  // flipped the circles (and the Submit counter, 0/5 → 1/5) when the
+  // rows arrived, which they do last. The registration row only matters
+  // once the family is accepted, so applicants don't wait on it. A
+  // failed fetch settles the wait (the page shows its error card).
+  const progressPending =
+    (progressData === undefined && !progressError) ||
+    (progressData?.isAccepted === true &&
+      regProgressData === undefined &&
+      !regProgressError);
+  const stepsLoading = loading || scholarshipLoading || progressPending;
 
   const scholarshipStarted = !!(scholarshipData && scholarshipData.id);
   const financialAidStarted = scholarshipStarted || yearApps.some((app) => {

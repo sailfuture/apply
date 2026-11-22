@@ -171,3 +171,9 @@ export function useApplicationFlow() {
   }
   return ctx;
 }
+
+/** Same context, or `null` outside the step layout. For shared pieces
+ *  (the error card) that render both inside and outside the flow. */
+export function useOptionalApplicationFlow() {
+  return useContext(ApplicationFlowContext);
+}

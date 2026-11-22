@@ -299,12 +299,21 @@ export default function EnrolledHomePage() {
     window.history.replaceState(null, "", `/dashboard?yearId=${targetYearId}`);
   }, [targetYearId, requestedYearId]);
 
-  // Surface a friendly "we're making improvements" card once any of the
+  // Surface the "This page didn't load" card once any of the
   // three fetches has exhausted SWR's retry budget (capped at 3 in
   // `<SWRProvider>`). Without this the page falls back to `loading`
   // forever — `appsData` / `yearsData` stay undefined while `error` is
   // set, so the spinner never resolves.
-  const hasError = !!(appsError || yearsError || yearStatusError);
+  //
+  // Only an error with NO data behind it counts. These keys re-poll in
+  // the background, and one failed poll used to swap a dashboard that
+  // was already on screen (and any sheet open on it) for the error
+  // card; the stale copy stays up instead and the next poll repairs it.
+  const hasError = !!(
+    (!appsData && appsError) ||
+    (!yearsData && yearsError) ||
+    (!yearStatusMap && yearStatusError)
+  );
   if (hasError) {
     return <ServiceUnavailable />;
   }

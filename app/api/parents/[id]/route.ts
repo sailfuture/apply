@@ -44,13 +44,59 @@ export async function PATCH(
   // other row the field is dropped silently — the UI only renders the
   // checkbox on the signed-in parent's card, so a mismatch here is a
   // stale/hand-crafted request, not a user action.
-  const { sms_consent: smsConsentRaw, ...fields } = body ?? {};
-  let patch: Record<string, unknown> = fields;
-  if (typeof smsConsentRaw === "boolean") {
-    const target = await xano.parents.getById(parentId);
-    if (target?.clerk_user_id === userId) {
-      patch = { ...fields, ...smsConsentParentFields(smsConsentRaw) };
+  const {
+    sms_consent: smsConsentRaw,
+    // Sent by the confirmation dialog only; never a column.
+    confirm_email_change: confirmEmailChange,
+    ...fields
+  } = body ?? {};
+  const target = await xano.parents.getById(parentId);
+  const isOwnRow = !!target?.clerk_user_id && target.clerk_user_id === userId;
+  const targetHasAccount = !!target?.clerk_user_id;
+
+  // A guardian's email is also their SIGN-IN email once they have an
+  // account. Another parent on the family must not be able to change
+  // it: this route used to accept the edit and re-point that person's
+  // login (unverified) — and the registration step re-saves every
+  // parent on the family whenever anything on the page changes. For a
+  // row that belongs to someone else's account the email is dropped
+  // here; their own edits, and edits to an invited parent who has not
+  // signed up yet, go through as before.
+  if (targetHasAccount && !isOwnRow) {
+    delete fields.email;
+  }
+
+  // The account holder changing their OWN sign-in email must have
+  // confirmed it (the forms show a dialog and then send
+  // `confirm_email_change: true`). The forms also save every field on a
+  // timer and on blur, so without this a half-typed or mistyped address
+  // became the sign-in email with no question asked. An unconfirmed
+  // change is simply not applied; the rest of the save goes through.
+  if (isOwnRow && typeof fields.email === "string") {
+    const next = fields.email.trim().toLowerCase();
+    const current = (target?.email ?? "").trim().toLowerCase();
+    if (next !== current && confirmEmailChange !== true) {
+      delete fields.email;
     }
+  }
+
+  // An incomplete address (the forms save while the parent is still
+  // typing) is refused here with a message. Xano rejects it anyway, and
+  // that used to surface as an unexplained 500.
+  if (
+    typeof fields.email === "string" &&
+    fields.email.trim() !== "" &&
+    !LOOKS_LIKE_EMAIL.test(fields.email.trim())
+  ) {
+    return NextResponse.json(
+      { error: "Please enter a complete email address." },
+      { status: 400 }
+    );
+  }
+
+  let patch: Record<string, unknown> = fields;
+  if (typeof smsConsentRaw === "boolean" && isOwnRow) {
+    patch = { ...fields, ...smsConsentParentFields(smsConsentRaw) };
   }
 
   const updated = await xano.parents.update(parentId, patch);
@@ -64,8 +110,17 @@ export async function PATCH(
   // and we don't want a Clerk hiccup to roll the user's edit back. The
   // Clerk → Xano webhook reconciles any drift on the next user.updated
   // event.
+  //
+  // The sign-in identifiers (email, phone) are only ever mirrored from
+  // the account holder's own edit. Someone else filling in a guardian's
+  // phone number updates the contact record, not that person's login.
   if (updated.clerk_user_id) {
-    await syncParentToClerk(updated.clerk_user_id, body);
+    const clerkBody: Record<string, unknown> = { ...fields };
+    if (!isOwnRow) {
+      delete clerkBody.email;
+      delete clerkBody.phone;
+    }
+    await syncParentToClerk(updated.clerk_user_id, clerkBody);
   }
 
   return NextResponse.json(updated, { status: 200 });
@@ -79,6 +134,9 @@ export async function PATCH(
  * dedicated Clerk collections (you can't change them via `updateUser`)
  * and marked verified + primary so the parent stays signed in.
  */
+/** A complete-looking address: something@something.tld, no spaces. */
+const LOOKS_LIKE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 async function syncParentToClerk(
   clerkUserId: string,
   body: Record<string, unknown>
@@ -103,7 +161,14 @@ async function syncParentToClerk(
   // exactly one email on file. Skipping verification keeps the user
   // signed in; we trust the form input since the parent typed it.
   const emailRaw = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-  if (emailRaw) {
+  // Only a complete address may become the sign-in email. The forms
+  // autosave while the parent is still typing, and a half-typed value
+  // ("jane@gm") used to be written to Clerk as a verified primary.
+  if (emailRaw && !LOOKS_LIKE_EMAIL.test(emailRaw)) {
+    console.warn(
+      `Not mirroring an incomplete email to Clerk user ${clerkUserId}.`
+    );
+  } else if (emailRaw) {
     try {
       const user = await clerk.users.getUser(clerkUserId);
       const currentPrimary = user.emailAddresses.find(

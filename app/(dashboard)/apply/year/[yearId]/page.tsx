@@ -671,6 +671,13 @@ export default function YearOverviewPage() {
     }
 
     if (onRegistration) {
+      // `stage` reads "apply" until the progress row has arrived, and
+      // that row is the slowest of the page's fetches. Deciding before
+      // it settled sent every accepted family /registration → /apply →
+      // /registration on sign-in (two extra navigations and a second
+      // full-page loader). Wait for it; a failed read shows the error
+      // card instead.
+      if (familyProgressLoading || familyProgressError) return;
       router.replace(`/apply/year/${yearId}`);
     }
   }, [

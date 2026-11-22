@@ -22,8 +22,17 @@ export default function DashboardLayout({
   // Re-applications share the `/apply/year/:id` URL space with new applicants
   // (the `type` field on the progress row drives flow-specific behavior),
   // so there's no separate `/reapply` matcher here anymore.
+  //
+  // `/apply` itself (the "which school year?" chooser) is part of the
+  // same flow: it sits between /welcome and /apply/year/X, both on the
+  // clean shell. It used to render in the sidebar shell, so a new
+  // parent saw the layout swap twice in a row — and that sidebar listed
+  // steps for next year (with warning icons and a "Submit Application"
+  // button) before they had picked a year.
   const isApplicationFlow =
     pathname.startsWith("/dashboard") ||
+    pathname === "/apply" ||
+    pathname === "/apply/" ||
     /^\/apply\/year\/\d+/.test(pathname) ||
     /^\/registration\/year\/\d+/.test(pathname);
 
@@ -39,7 +48,7 @@ export default function DashboardLayout({
   // user state safely.
   if (!isLoaded) {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
         <LoadingScreen />
       </div>
     );

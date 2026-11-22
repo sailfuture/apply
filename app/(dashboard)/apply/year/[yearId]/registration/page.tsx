@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useParams } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useApplications, useStudents, mutateApplications, mutateStudents, apiFetch } from "@/hooks/use-api";
 import { useSWRConfig } from "swr";
@@ -72,6 +73,7 @@ import {
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
+import { ConfirmEmailChangeDialog } from "@/components/confirm-email-change-dialog";
 import { US_STATES } from "@/lib/us-states";
 import {
   FileUpload,
@@ -101,6 +103,8 @@ interface Parent {
   state: string;
   zipcode: string;
   invite_status: string;
+  /** Set once this guardian has an account of their own. */
+  clerk_user_id?: string | null;
 }
 
 interface EmergencyContact {
@@ -742,6 +746,10 @@ function DocumentUpload({
 
 export default function RegistrationPage() {
   const params = useParams();
+  // Whose card is whose: a guardian's email is their sign-in email once
+  // they have an account, so only they may edit it (the API enforces
+  // the same rule).
+  const { user: clerkUser } = useUser();
   const yearId = Number(params.yearId);
 
   const {
@@ -1416,6 +1424,65 @@ export default function RegistrationPage() {
     );
   }
 
+  // A change to the signed-in parent's OWN email is also a change to
+  // what they sign in with. This page saves every field on a timer, and
+  // the API ignores a changed sign-in email that hasn't been confirmed,
+  // so leaving the field proposes the change and the dialog commits it
+  // (see ConfirmEmailChangeDialog).
+  const currentUserEmail = clerkUser?.primaryEmailAddress?.emailAddress ?? "";
+  const [pendingEmail, setPendingEmail] = useState<{
+    parentId: number;
+    email: string;
+  } | null>(null);
+  const [changingEmail, setChangingEmail] = useState(false);
+
+  function handleOwnEmailBlur(parent: Parent, value: string) {
+    if (!parent.clerk_user_id || parent.clerk_user_id !== clerkUser?.id) return;
+    const next = value.trim();
+    if (!next) {
+      updateParentLocal(parent.id, "email", currentUserEmail);
+      return;
+    }
+    if (next.toLowerCase() === currentUserEmail.trim().toLowerCase()) return;
+    setPendingEmail({ parentId: parent.id, email: next });
+  }
+
+  async function confirmEmailChange() {
+    if (!pendingEmail) return;
+    setChangingEmail(true);
+    try {
+      const res = await fetch(`/api/parents/${pendingEmail.parentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: pendingEmail.email,
+          confirm_email_change: true,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? "");
+      }
+      await clerkUser?.reload();
+      toast.success("Your sign-in email was changed.");
+      setPendingEmail(null);
+    } catch (err) {
+      toast.error(
+        (err instanceof Error && err.message) ||
+          "We couldn't change your email. Please try again."
+      );
+    } finally {
+      setChangingEmail(false);
+    }
+  }
+
+  function cancelEmailChange() {
+    if (pendingEmail) {
+      updateParentLocal(pendingEmail.parentId, "email", currentUserEmail);
+    }
+    setPendingEmail(null);
+  }
+
   // ---------------------------------------------------------------------------
   // Emergency contact helpers
   // ---------------------------------------------------------------------------
@@ -2086,8 +2153,22 @@ export default function RegistrationPage() {
                                   type="email"
                                   placeholder="email@example.com"
                                   value={parent.email || ""}
+                                  // Another guardian's sign-in email is
+                                  // theirs alone to change.
+                                  disabled={
+                                    !!parent.clerk_user_id &&
+                                    parent.clerk_user_id !== clerkUser?.id
+                                  }
                                   onChange={(e) => updateParentLocal(parent.id, "email", e.target.value)}
+                                  onBlur={(e) => handleOwnEmailBlur(parent, e.target.value)}
                                 />
+                                {!!parent.clerk_user_id &&
+                                  parent.clerk_user_id !== clerkUser?.id && (
+                                    <p className="text-xs text-muted-foreground">
+                                      Only {parent.first_name || "this guardian"} can
+                                      change their sign-in email.
+                                    </p>
+                                  )}
                               </Field>
                               <Field>
                                 <FieldLabel className="text-xs">Phone</FieldLabel>
@@ -3069,6 +3150,14 @@ export default function RegistrationPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ConfirmEmailChangeDialog
+        from={currentUserEmail}
+        to={pendingEmail?.email ?? null}
+        busy={changingEmail}
+        onConfirm={() => void confirmEmailChange()}
+        onCancel={cancelEmailChange}
+      />
 
       {/* Add Parent / Guardian Sheet — mirrors the invite flow on /family so
           parents can add a secondary contact without leaving this page. */}

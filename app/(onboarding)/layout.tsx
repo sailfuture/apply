@@ -15,7 +15,11 @@ export default function OnboardingLayout({
       {isLoaded ? (
         children
       ) : (
-        <div className="flex min-h-[40vh] items-center justify-center">
+        // Same box as every other parent loader, so the spinner doesn't
+        // jump when this hands off to the page's own (it used to sit
+        // near the top of the screen here and mid-screen everywhere
+        // else).
+        <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
           <LoadingScreen />
         </div>
       )}

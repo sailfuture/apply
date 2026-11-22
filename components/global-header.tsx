@@ -134,7 +134,10 @@ export function GlobalHeader() {
       yearId ??
       ((years ?? []).find((y) => y.isNextYear) ?? (years ?? []).find((y) => y.isActive))?.id;
     if (!targetId) return "/";
-    return isAccepted
+    // `isRegistrationFlow`, not just `isAccepted`: the registration
+    // step pages live under /apply/year/X/<step>, and from there the
+    // logo used to go to /apply/year/X only to be redirected on.
+    return isRegistrationFlow
       ? `/registration/year/${targetId}`
       : `/apply/year/${targetId}`;
   })();

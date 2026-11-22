@@ -41,6 +41,7 @@ import {
 import { StateSelect } from "@/components/state-select";
 import { Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmEmailChangeDialog } from "@/components/confirm-email-change-dialog";
 import { useSWRConfig } from "swr";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { SmsConsentFields } from "@/components/sms-consent-fields";
@@ -58,6 +59,8 @@ interface Parent {
   phone: string;
   relationship: string;
   invite_status: string;
+  /** Set once this guardian has an account of their own. */
+  clerk_user_id?: string | null;
   address_line_1: string;
   address_line_2: string;
   city: string;
@@ -166,6 +169,78 @@ export default function FamilyStepPage() {
   }
 
   const [saving, setSaving] = useState(false);
+
+  // Is this card the signed-in parent's own? By account id, so the
+  // answer doesn't flip while they are typing in their email field (the
+  // old test compared the field's text to the sign-in email). Falls
+  // back to the email for a row that arrived without its account id.
+  function isMyCard(parent: Parent): boolean {
+    if (parent.clerk_user_id) return parent.clerk_user_id === clerkUser?.id;
+    return parent.email === currentUserEmail;
+  }
+
+  // A change to the signed-in parent's OWN email is also a change to
+  // what they sign in with. Leaving the field only proposes it; the
+  // dialog commits it (see ConfirmEmailChangeDialog).
+  const [pendingEmail, setPendingEmail] = useState<{
+    parentId: number;
+    email: string;
+  } | null>(null);
+  const [changingEmail, setChangingEmail] = useState(false);
+
+  function handleEmailBlur(parent: Parent, value: string) {
+    if (!isMyCard(parent)) {
+      // An invited parent who hasn't signed up yet: a plain contact
+      // field. (A guardian WITH an account has this field disabled.)
+      void saveParentField(parent.id, "email", value);
+      return;
+    }
+    const next = value.trim();
+    if (!next) {
+      updateParentLocal(parent.id, "email", currentUserEmail);
+      return;
+    }
+    if (next.toLowerCase() === currentUserEmail.trim().toLowerCase()) return;
+    setPendingEmail({ parentId: parent.id, email: next });
+  }
+
+  async function confirmEmailChange() {
+    if (!pendingEmail) return;
+    setChangingEmail(true);
+    try {
+      const res = await fetch(`/api/parents/${pendingEmail.parentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: pendingEmail.email,
+          confirm_email_change: true,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? "");
+      }
+      // Pick up the new sign-in email so this card still reads as "mine"
+      // and the header shows the right address.
+      await clerkUser?.reload();
+      toast.success("Your sign-in email was changed.");
+      setPendingEmail(null);
+    } catch (err) {
+      toast.error(
+        (err instanceof Error && err.message) ||
+          "We couldn't change your email. Please try again."
+      );
+    } finally {
+      setChangingEmail(false);
+    }
+  }
+
+  function cancelEmailChange() {
+    if (pendingEmail) {
+      updateParentLocal(pendingEmail.parentId, "email", currentUserEmail);
+    }
+    setPendingEmail(null);
+  }
 
   async function saveParentField(parentId: number, field: string, value: string) {
     // Per-field onBlur auto-save — drives the global SaveStatusPill badge
@@ -570,7 +645,7 @@ export default function FamilyStepPage() {
                           </svg>
                         </div>
                       )}
-                      {parent.email !== currentUserEmail && (
+                      {!isMyCard(parent) && (
                         <Button
                           variant="outline"
                           size="icon"
@@ -639,13 +714,24 @@ export default function FamilyStepPage() {
                           placeholder="email@example.com"
                           value={parent.email || ""}
                           autoComplete="email"
+                          // Another guardian's sign-in email is theirs
+                          // alone to change (the API enforces it too).
+                          disabled={
+                            !!parent.clerk_user_id &&
+                            parent.clerk_user_id !== clerkUser?.id
+                          }
                           onChange={(e) =>
                             updateParentLocal(parent.id, "email", e.target.value)
                           }
-                          onBlur={(e) =>
-                            saveParentField(parent.id, "email", e.target.value)
-                          }
+                          onBlur={(e) => handleEmailBlur(parent, e.target.value)}
                         />
+                        {!!parent.clerk_user_id &&
+                          parent.clerk_user_id !== clerkUser?.id && (
+                            <p className="text-xs text-muted-foreground">
+                              Only {parent.first_name || "this guardian"} can
+                              change their sign-in email.
+                            </p>
+                          )}
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
@@ -695,7 +781,7 @@ export default function FamilyStepPage() {
                         consent on file, incl. from the welcome page)
                         and toggling auto-saves like every other field
                         on this card. */}
-                    {parent.email === currentUserEmail ? (
+                    {isMyCard(parent) ? (
                       <div className="mt-4 rounded-lg border bg-muted/30 p-4">
                         <SmsConsentFields
                           showPhone={false}
@@ -903,6 +989,14 @@ export default function FamilyStepPage() {
           </form>
         </SheetContent>
       </Sheet>
+
+      <ConfirmEmailChangeDialog
+        from={currentUserEmail}
+        to={pendingEmail?.email ?? null}
+        busy={changingEmail}
+        onConfirm={() => void confirmEmailChange()}
+        onCancel={cancelEmailChange}
+      />
     </>
   );
 }

@@ -165,7 +165,9 @@ export default async function Page() {
   // looked like an endless loading screen.
   if (!targetYearId) {
     return (
-      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
+      // Opaque: this covers the loader the group layout paints behind
+      // the page for the redirect case.
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center bg-gray-50 px-4 dark:bg-background">
         <div className="max-w-md text-center space-y-2">
           <h1 className="text-xl font-semibold">
             No enrollment period is currently open

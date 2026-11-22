@@ -152,6 +152,13 @@ const DERIVED_VIEWS: Record<string, readonly string[]> = {
   registration_student_registration_progress: [
     "registration_student_registration_progress_by_year",
   ],
+  // A family row comes back with its parents EMBEDDED (full objects),
+  // and `/api/families` serves those. Without this a parent edit — a
+  // new email, an invite being accepted — left every family read
+  // showing the old parent for up to the long TTL: the guardian who had
+  // just signed in still read "pending", and after an email change the
+  // form reloaded with the old address in the field.
+  registration_parents: ["registration_families"],
 };
 
 /**

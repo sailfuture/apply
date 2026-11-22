@@ -262,9 +262,14 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
   const pathname = usePathname();
   const router = useRouter();
   const { hideChrome } = useApplicationFlow();
-  const { steps, registrationSteps, stepsLoading } = useApplicationSteps(yearId);
+  const { steps, registrationSteps, stepsLoading, isAccepted } =
+    useApplicationSteps(yearId);
 
   const basePath = `/apply/year/${yearId}`;
+  // Where "Dashboard" goes. An accepted family's overview lives under
+  // /registration; sending them to /apply first showed that page's
+  // full-screen loader and then redirected them on every click.
+  const overviewPath = isAccepted ? `/registration/year/${yearId}` : basePath;
   const isOverview = pathname === basePath || pathname === `${basePath}/`;
 
   if (isOverview || hideChrome) return null;
@@ -312,7 +317,7 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
       items={items}
       submit={submit}
       loading={stepsLoading}
-      onDashboard={() => router.push(basePath)}
+      onDashboard={() => router.push(overviewPath)}
     />
   );
 }

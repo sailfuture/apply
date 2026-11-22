@@ -59,9 +59,14 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   // Section completion is tracked in `registration_family_application_progress`
   // (one row per family per year). The review modal renders one row per section
   // with a Fix button if the section isn't yet marked complete.
-  const { progress, submit: submitFamilyApplication } = useFamilyProgress(Number(yearId));
+  const {
+    progress,
+    loading: progressLoading,
+    submit: submitFamilyApplication,
+  } = useFamilyProgress(Number(yearId));
   const {
     progress: regProgress,
+    loading: regProgressLoading,
     submit: submitRegistration,
   } = useStudentRegistrationProgress(Number(yearId));
   const [submitting, setSubmitting] = useState(false);
@@ -86,10 +91,29 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   );
 
   // Get registration step counts for the Complete Section button
-  const { registrationSteps, steps } = useApplicationSteps(Number(yearId));
+  const { registrationSteps, steps, isAccepted } = useApplicationSteps(Number(yearId));
   const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours", "lunch-letter"]);
   const currentSegment = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0] || "";
   const isRegistrationPage = REGISTRATION_SEGMENTS.has(currentSegment);
+
+  // Where "Return to Dashboard" and the post-submit hop go. The step
+  // pages all live under /apply/year/X/<step>, but an accepted family's
+  // overview is /registration/year/X — heading for /apply first showed
+  // that page's full-screen loader and then redirected them, on every
+  // click.
+  const overviewPath =
+    isAccepted || isRegistrationPage
+      ? `/registration/year/${yearId}`
+      : basePath;
+
+  // A step page decides "completed and locked" vs "editable" from its
+  // progress row, which arrives after everything else. Until it does,
+  // hold the page back behind a placeholder: showing it first drew an
+  // editable form with a live "Complete" button and then dimmed it a
+  // moment later. First load only — a client-side move between steps
+  // already has the row cached.
+  const awaitingProgress =
+    !isOverview && (isRegistrationPage ? regProgressLoading : progressLoading);
 
   // Kick the parent back to the dashboard if their acceptance has
   // been revoked while they're on a post-acceptance page (tuition,
@@ -147,9 +171,9 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     if (prevStep) {
       router.push(prevStep.href);
     } else {
-      router.push(basePath);
+      router.push(overviewPath);
     }
-  }, [backGuard, onBack, prevStep, router, basePath]);
+  }, [backGuard, onBack, prevStep, router, overviewPath]);
 
   // Local "pressing" state for the Complete Section button. The page-side
   // saveHandler does some sync validation work before flipping its
@@ -265,7 +289,31 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           {/* Main scrollable content. The global auto-save pill is placed
               inline in each page's header via <GlobalSaveStatusPill />.
               Extra bottom padding on mobile leaves room for the fixed nav. */}
-          <main className="flex-1 min-w-0">
+          <main
+            className="relative flex-1 min-w-0"
+            // On a step page the error card sits in this column, beside
+            // the side nav and above the bottom bar, so it must not
+            // claim a full viewport of height (see ServiceUnavailable).
+            style={
+              isOverview
+                ? undefined
+                : ({ "--svc-min-h": "24rem" } as React.CSSProperties)
+            }
+          >
+            {/* Placeholder while the step's progress row is still on its
+                way (see `awaitingProgress`). The page underneath is
+                mounted and loading its own data, just not shown yet. */}
+            {awaitingProgress && (
+              <div
+                aria-hidden
+                className="absolute inset-x-0 top-0 flex flex-col gap-6 p-6"
+              >
+                <div className="h-3 w-24 rounded bg-muted animate-pulse" />
+                <div className="h-7 w-2/3 rounded bg-muted animate-pulse" />
+                <div className="h-40 w-full rounded-lg bg-muted animate-pulse" />
+                <div className="h-40 w-full rounded-lg bg-muted animate-pulse" />
+              </div>
+            )}
             {/* When the section is marked complete, dim AND fully block
                 interaction with the page contents (`pointer-events-none`).
                 Previously only the opacity changed — inputs underneath
@@ -277,11 +325,14 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                 button below). */}
             <div
               className={
-                saveOptions.completed
-                  ? "opacity-50 pointer-events-none select-none"
-                  : ""
+                awaitingProgress
+                  ? "invisible"
+                  : saveOptions.completed
+                    ? "opacity-50 pointer-events-none select-none"
+                    : ""
               }
               aria-disabled={saveOptions.completed || undefined}
+              aria-busy={awaitingProgress || undefined}
             >
               {children}
             </div>
@@ -340,7 +391,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                       type="button"
                       variant="outline"
                       className="flex-1 min-w-0 py-2.5 bg-white"
-                      onClick={() => router.push(basePath)}
+                      onClick={() => router.push(overviewPath)}
                     >
                       <span className="truncate">Return to Dashboard</span>
                     </Button>
@@ -432,7 +483,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
               await submitFamilyApplication();
             }
             setPreSubmitOpen(false);
-            router.push(basePath);
+            router.push(overviewPath);
           } catch {
             // Keep the modal open so they can retry, and say so. The id
             // de-dupes against any toast the submit helper already raised.
