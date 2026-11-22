@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
@@ -20,6 +20,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { LeadRowSheet } from "@/components/admin/lead-row-sheet";
 import { LeadDuplicatesDialog } from "@/components/admin/lead-duplicates-dialog";
+import {
+  LeadExportDialog,
+  type LeadExportScope,
+} from "@/components/admin/lead-export-dialog";
 import {
   Card,
   CardContent,
@@ -54,6 +58,7 @@ import {
   sortYearsOldestFirst,
   type LeadYearView,
 } from "@/lib/school-years";
+import { foldSearch } from "@/lib/search-text";
 import { cn } from "@/lib/utils";
 import type {
   AllLeadRow,
@@ -202,6 +207,92 @@ function isStaleLead(r: AllLeadRow): boolean {
 type GroupKey = (typeof GROUP_DEFS)[number]["key"];
 
 /**
+ * Split leads into the funnel group cards. A real conversion link
+ * outranks a "not interested" mark (linking means the family
+ * demonstrably applied); declined-and-unconverted rows drop out of
+ * Active Leads into their own card at the bottom.
+ */
+function groupLeads(list: AllLeadRow[]): Record<GroupKey, AllLeadRow[]> {
+  const out: Record<GroupKey, AllLeadRow[]> = {
+    active: [],
+    linked: [],
+    started: [],
+    applied: [],
+    accepted: [],
+    enrolled: [],
+    notInterested: [],
+    archived: [],
+  };
+  for (const r of list) {
+    // Archived outranks everything — it's an explicit "this row is
+    // not a lead" mark — then a real conversion link, then declined.
+    const key: GroupKey =
+      r.lead_status === "archived"
+        ? "archived"
+        : r.funnel_stage !== ""
+          ? (r.funnel_stage as GroupKey)
+          : r.lead_status === "not_interested"
+            ? "notInterested"
+            : "active";
+    (out[key] ?? out.active).push(r);
+  }
+  // Every group orders by MOST RECENT ACTIVITY — the later of the
+  // lead's last contact and its sign-up date.
+  //
+  // Sorting on last contact alone buried the new arrivals: a lead
+  // nobody has called yet has `last_reach_out` 0, so it sank below
+  // every lead ever contacted and a sign-up from this morning
+  // landed pages deep. Taking the max of the two keeps both kinds
+  // of "new" at the top — a fresh sign-up and a conversation from
+  // an hour ago sit side by side, which is what the queue is for.
+  // Ties break on the newer sign-up. Clicking either column header
+  // still re-sorts on that column alone.
+  for (const group of Object.values(out)) {
+    group.sort(
+      (a, b) =>
+        leadLastActivity(b) - leadLastActivity(a) ||
+        b.submitted_ts - a.submitted_ts
+    );
+  }
+  return out;
+}
+
+/** Leads in the order the page lists them, top to bottom: group card
+ *  by group card, most recent activity first inside each. The order
+ *  the export writes its rows in. */
+function inBoardOrder(list: AllLeadRow[]): AllLeadRow[] {
+  const grouped = groupLeads(list);
+  return GROUP_DEFS.flatMap((g) => grouped[g.key]);
+}
+
+/**
+ * What the Parent column is searched (and sorted) by. Carries the
+ * CONTACT INFO too: phone + email left the table (they crowded it;
+ * the row's sheet has both with call / mail / copy actions), but
+ * searching by them must keep working. Sorting still orders by parent
+ * name — the name is the string's prefix. Folded duplicates' names
+ * ride along too, so searching for the camp sign-up's spelling still
+ * finds the primary row.
+ */
+function parentSearchText(r: AllLeadRow): string {
+  return `${r.parent_name} ${r.email} ${r.phone} ${r.linked_leads.map((l) => l.name).join(" ")}`;
+}
+
+/**
+ * Would the search box keep this lead on screen? The same test the
+ * tables run over their searchable columns (student, parent +
+ * contact info, school), so the export's "current view" holds exactly
+ * the rows the cards are showing.
+ */
+function leadMatchesSearch(r: AllLeadRow, search: string): boolean {
+  if (!search.trim()) return true;
+  const q = foldSearch(search);
+  return [r.student_name, parentSearchText(r), r.school].some((v) =>
+    foldSearch(v).includes(q)
+  );
+}
+
+/**
  * All Leads — the four recruitment sources (website inquiries, summer
  * camp, liability-waiver visits, TASCO summer visits) flattened into
  * one page, grouped by conversion stage: the active triage queue on
@@ -265,17 +356,16 @@ export default function AllLeadsPage() {
   const workingYearName =
     schoolYears.find((y) => y.id === workingYearId)?.year_name ?? "";
 
-  const visible = useMemo(
+  // Every dropdown filter EXCEPT Status. Split out so the export can
+  // offer "the current view, plus its archived leads" without a
+  // second copy of these rules.
+  const filteredAnyStatus = useMemo(
     () =>
       rows.filter((r) => {
         // Duplicates folded under a primary ride inside that row
         // (its "linked" chip, its sheet, its search text) — never as
         // their own line.
         if (r.linked_to) return false;
-        const isArchived = r.lead_status === "archived";
-        if (statusFilter === "archived" ? !isArchived : isArchived) {
-          return false;
-        }
         if (sourceFilter.length > 0 && !sourceFilter.includes(r.source)) {
           return false;
         }
@@ -296,7 +386,6 @@ export default function AllLeadsPage() {
       }),
     [
       rows,
-      statusFilter,
       contactFilter,
       sourceFilter,
       minRating,
@@ -305,6 +394,18 @@ export default function AllLeadsPage() {
       yearView,
       workingYearId,
     ]
+  );
+
+  // What the board shows: the working rows, or — on the Status
+  // filter's "Archived" — only the parked ones.
+  const visible = useMemo(
+    () =>
+      filteredAnyStatus.filter((r) =>
+        statusFilter === "archived"
+          ? r.lead_status === "archived"
+          : r.lead_status !== "archived"
+      ),
+    [filteredAnyStatus, statusFilter]
   );
 
   // How many leads the working view hides because they're tagged for
@@ -320,54 +421,8 @@ export default function AllLeadsPage() {
     [rows, yearView, workingYearId]
   );
 
-  // Split the filtered rows into the funnel group cards. A real
-  // conversion link outranks a "not interested" mark (linking means
-  // the family demonstrably applied); declined-and-unconverted rows
-  // drop out of Active Leads into their own card at the bottom.
-  const groups = useMemo(() => {
-    const out: Record<GroupKey, AllLeadRow[]> = {
-      active: [],
-      linked: [],
-      started: [],
-      applied: [],
-      accepted: [],
-      enrolled: [],
-      notInterested: [],
-      archived: [],
-    };
-    for (const r of visible) {
-      // Archived outranks everything — it's an explicit "this row is
-      // not a lead" mark — then a real conversion link, then declined.
-      const key: GroupKey =
-        r.lead_status === "archived"
-          ? "archived"
-          : r.funnel_stage !== ""
-            ? (r.funnel_stage as GroupKey)
-            : r.lead_status === "not_interested"
-              ? "notInterested"
-              : "active";
-      (out[key] ?? out.active).push(r);
-    }
-    // Every group orders by MOST RECENT ACTIVITY — the later of the
-    // lead's last contact and its sign-up date.
-    //
-    // Sorting on last contact alone buried the new arrivals: a lead
-    // nobody has called yet has `last_reach_out` 0, so it sank below
-    // every lead ever contacted and a sign-up from this morning
-    // landed pages deep. Taking the max of the two keeps both kinds
-    // of "new" at the top — a fresh sign-up and a conversation from
-    // an hour ago sit side by side, which is what the queue is for.
-    // Ties break on the newer sign-up. Clicking either column header
-    // still re-sorts on that column alone.
-    const lastActivity = leadLastActivity;
-    for (const list of Object.values(out)) {
-      list.sort(
-        (a, b) =>
-          lastActivity(b) - lastActivity(a) || b.submitted_ts - a.submitted_ts
-      );
-    }
-    return out;
-  }, [visible]);
+  // The filtered rows split into the funnel group cards.
+  const groups = useMemo(() => groupLeads(visible), [visible]);
 
   // Rollup over the WHOLE lead pool (not the filtered view) — every
   // figure counts LEADS, so the four read against one denominator.
@@ -392,6 +447,66 @@ export default function AllLeadsPage() {
     }
     return { total, converted, toured, notInterested };
   }, [rows]);
+
+  // Rows for the Export dialog, in the page's own order. "view" is
+  // what the cards are showing right now — every dropdown filter plus
+  // the search box; "all" is every lead in every year. Either way a
+  // folded duplicate never gets a row of its own, and archived leads
+  // only ride along when the dialog asks for them (on the Archived
+  // view they ARE the view).
+  const exportRowsFor = useCallback(
+    (scope: LeadExportScope, includeArchived: boolean): AllLeadRow[] => {
+      if (scope === "all") {
+        return inBoardOrder(
+          rows.filter(
+            (r) =>
+              !r.linked_to &&
+              (includeArchived || r.lead_status !== "archived")
+          )
+        );
+      }
+      const base =
+        includeArchived && statusFilter !== "archived"
+          ? filteredAnyStatus
+          : visible;
+      return inBoardOrder(base.filter((r) => leadMatchesSearch(r, search)));
+    },
+    [rows, filteredAnyStatus, visible, statusFilter, search]
+  );
+
+  // The same view, in words, for the Export dialog.
+  const viewSummary = [
+    yearView === "working"
+      ? `${workingYearName || "This year"} + no year set`
+      : yearView === "any"
+        ? "Any year"
+        : yearView === 0
+          ? "No year set"
+          : (schoolYears.find((y) => y.id === yearView)?.year_name ?? "Year"),
+    ...(sourceFilter.length > 0
+      ? [`Source: ${sourceFilter.map((s) => SOURCE_META[s].label).join(", ")}`]
+      : []),
+    ...(minRating > 0
+      ? [`Rating: ${minRating}${minRating < 5 ? "+" : ""} stars`]
+      : []),
+    ...(followUpFilter !== null
+      ? [followUpFilter ? "Followed up" : "Needs follow-up"]
+      : []),
+    ...(tourFilter !== null
+      ? [
+          tourFilter === "completed"
+            ? "Toured"
+            : tourFilter === "scheduled"
+              ? "Tour scheduled"
+              : "No tour",
+        ]
+      : []),
+    ...(contactFilter !== null
+      ? [contactFilter === "stale" ? "Stale (60+ days)" : "Never contacted"]
+      : []),
+    ...(statusFilter === "archived" ? ["Archived only"] : []),
+    ...(search.trim() ? [`Search: “${search.trim()}”`] : []),
+  ];
 
   // Keep the open sheet's snapshot fresh after a rating/follow-up/note
   // write revalidates the list.
@@ -625,15 +740,9 @@ export default function AllLeadsPage() {
         sortable: true,
         searchable: true,
         width: "w-[14%]",
-        // Accessor carries the CONTACT INFO too: phone + email left
-        // the table (they crowded it; the row's sheet has both with
-        // call / mail / copy actions), but searching by them must
-        // keep working. Sorting still orders by parent name — the
-        // name is the string's prefix.
-        // Folded duplicates' names ride along too, so searching for
-        // the camp sign-up's spelling still finds the primary row.
-        accessor: (r) =>
-          `${r.parent_name} ${r.email} ${r.phone} ${r.linked_leads.map((l) => l.name).join(" ")}`,
+        // Searched by contact info and folded duplicates' names
+        // too — see parentSearchText.
+        accessor: parentSearchText,
         render: (r) => (
           <span className="block truncate text-sm">
             {r.parent_name || "—"}
@@ -944,6 +1053,13 @@ export default function AllLeadsPage() {
             <Copy className="size-3.5 mr-1.5" />
             Find duplicates
           </Button>
+          {/* Export what's on screen (or everything) as a spreadsheet. */}
+          <LeadExportDialog
+            rowsFor={exportRowsFor}
+            viewSummary={viewSummary}
+            archivedOnlyView={statusFilter === "archived"}
+            disabled={rows.length === 0}
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

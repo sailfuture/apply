@@ -115,6 +115,16 @@ export type AllLeadRow = {
    *  page-computed sets override these. Today only inquiry rows carry
    *  any ("How they heard about us" / "About the student"). */
   extra_fields: Array<{ label: string; value: string }>;
+  /** The family's own answer to "how did you hear about us" — the
+   *  only referral fact any lead form collects, and only the website
+   *  inquiry asks it; "" on the other three sources. A plain field
+   *  (alongside its `extra_fields` copy) so the spreadsheet export
+   *  never has to find it by display label. */
+  heard_from: string;
+  /** What the family wrote about the student: inquiry `about_student`,
+   *  camp `describe_your_student_and_behavior`; "" on visit + TASCO
+   *  rows, whose forms don't ask. */
+  about_student: string;
   /** The primary this lead is folded under as a duplicate; null when
    *  it stands on its own. Folded rows stay in the feed (their sheet
    *  still opens) but the board hides them under the primary. */
@@ -358,6 +368,8 @@ async function handleGET(req: NextRequest) {
               value: (i.about_student ?? "").trim(),
             },
           ],
+          heard_from: (i.hear_about_us ?? "").trim(),
+          about_student: (i.about_student ?? "").trim(),
         };
       }),
       ...campRows.map(
@@ -397,6 +409,8 @@ async function handleGET(req: NextRequest) {
           // Camp's form answers are page-computed (year names etc.) —
           // the Summer Camp page passes its own set to the sheet.
           extra_fields: [],
+          heard_from: "",
+          about_student: (c.describe_your_student_and_behavior ?? "").trim(),
         })
       ),
       ...waivers.map(
@@ -424,6 +438,8 @@ async function handleGET(req: NextRequest) {
           converted_family_id: leadConvertedFamilyId(w),
           converted_at: Number(w.converted_at) || 0,
           extra_fields: [],
+          heard_from: "",
+          about_student: "",
         })
       ),
       ...tascoRows.map(
@@ -451,6 +467,8 @@ async function handleGET(req: NextRequest) {
           converted_family_id: leadConvertedFamilyId(t),
           converted_at: Number(t.converted_at) || 0,
           extra_fields: [],
+          heard_from: "",
+          about_student: "",
         })
       ),
     ];
