@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Clock, FileUp, Loader2, X, ExternalLink } from "lucide-react";
+import { PandaDocSigningStep } from "./pandadoc-signing-step";
 
 /**
  * Per-student registration packet for a residential / foster mid-year
@@ -43,6 +44,10 @@ import { CheckCircle2, Clock, FileUp, Loader2, X, ExternalLink } from "lucide-re
  * NOTE: the liability waiver (PandaDoc) is intentionally NOT part of the
  * completion criteria here — who signs it for a foster placement (foster
  * parent vs. placing agency) is an open question to resolve separately.
+ *
+ * The public school transfer question IS here, for both users of this
+ * form (residential placements and mid-year siblings): ticking it
+ * requires the PandaDoc withdrawal form, signed by whoever is signed in.
  */
 
 type FileMeta = { path?: string; name?: string; url?: string; [k: string]: unknown };
@@ -83,6 +88,12 @@ interface Packet {
   other_adults_approved_for_pickup: string;
   prohibited_adults: string;
   registrationConfirmed?: boolean;
+  /** "Transferring from a Pinellas County public school". */
+  transferring_from_pinellas_public?: boolean;
+  /** Withdrawal form state. Server-owned: the packet PATCH strips these,
+   *  so the copies here only mirror what the PandaDoc routes wrote. */
+  withdrawal_form_pandadoc_id?: string | null;
+  withdrawal_form_status?: string | null;
 }
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
@@ -171,6 +182,12 @@ function isPacketComplete(
   if (p.carry_epi_pen && !p.epipen_explainer) return false;
   if (!p.other_adults_approved_for_pickup) return false;
   if (!p.prohibited_adults) return false;
+  if (
+    p.transferring_from_pinellas_public &&
+    p.withdrawal_form_status !== "completed"
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -307,10 +324,14 @@ export function ResidentialPacketForm({
   yearId,
   registrationTypeId,
   studentName,
+  applicationId,
   onSubmitted,
   onSubmit,
   alreadySubmitted = false,
 }: {
+  /** The student's application for this year: what the PandaDoc routes
+   *  check ownership against when the withdrawal form is opened. */
+  applicationId: number;
   studentId: number;
   yearId: number;
   registrationTypeId: number;
@@ -448,6 +469,49 @@ export function ResidentialPacketForm({
     () => (packet ? isPacketComplete(packet, docs) : false),
     [packet, docs]
   );
+
+  // The transfer answer saves the moment it's toggled, not with "Save for
+  // Later": a parent who ticks it, signs the form and leaves would
+  // otherwise come back to an unticked box hiding a signed document.
+  async function setTransferring(next: boolean) {
+    setField("transferring_from_pinellas_public", next);
+    if (!packet?.id) return;
+    try {
+      const res = await fetch(`/api/student-registration/${packet.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transferring_from_pinellas_public: next }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+    } catch (err) {
+      console.error("Failed to save transfer answer:", err);
+      setField("transferring_from_pinellas_public", !next);
+      toast.error("Couldn't save that answer. Please try again.");
+    }
+  }
+
+  // After signing, pull ONLY the withdrawal form's state off the server
+  // row. Replacing the whole packet would discard answers typed since
+  // the last save.
+  async function refreshWithdrawalForm() {
+    try {
+      const res = await fetch(`/api/student-registration?studentId=${studentId}`);
+      if (!res.ok) return;
+      const row = await res.json();
+      if (!row || typeof row !== "object") return;
+      setPacket((prev) =>
+        prev
+          ? {
+              ...prev,
+              withdrawal_form_pandadoc_id: row.withdrawal_form_pandadoc_id ?? null,
+              withdrawal_form_status: row.withdrawal_form_status ?? null,
+            }
+          : prev
+      );
+    } catch {
+      // The next load shows it; nothing to surface here.
+    }
+  }
 
   async function savePacket(): Promise<boolean> {
     if (!packet?.id) {
@@ -778,6 +842,64 @@ export function ResidentialPacketForm({
             value={packet.additional_health_information}
             onChange={(v) => setField("additional_health_information", v)}
           />
+        </CardContent>
+      </Card>
+
+      {/* Public school transfer + withdrawal form */}
+      <Card className="overflow-hidden gap-0 py-0">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">Public School Transfer</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">
+                Transferring from a Pinellas County public school
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Toggle on if this student is leaving a Pinellas County public
+                school to attend SailFuture Academy.
+              </p>
+            </div>
+            <Switch
+              checked={packet.transferring_from_pinellas_public === true}
+              onCheckedChange={(v) => void setTransferring(v)}
+              aria-label="Transferring from a Pinellas County public school"
+            />
+          </div>
+          {packet.transferring_from_pinellas_public ? (
+            <div
+              className={`rounded-md border p-4 space-y-3 ${
+                showValidation && packet.withdrawal_form_status !== "completed"
+                  ? "border-2 border-red-400"
+                  : ""
+              }`}
+            >
+              <div>
+                <p className="text-sm font-medium">
+                  Withdrawal form{" "}
+                  <span className="text-red-400">*</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Students entering the K-12 scholarship program from a
+                  Pinellas County public school need a signed withdrawal form.
+                </p>
+              </div>
+              <PandaDocSigningStep
+                type="withdrawal_form"
+                applicationId={applicationId}
+                yearId={yearId}
+                documentId={
+                  packet.withdrawal_form_status === "void"
+                    ? null
+                    : (packet.withdrawal_form_pandadoc_id ?? null)
+                }
+                signed={packet.withdrawal_form_status === "completed"}
+                label="withdrawal form"
+                onSigned={refreshWithdrawalForm}
+              />
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

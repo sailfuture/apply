@@ -256,6 +256,12 @@ async function registrationStep(
   if (!additionTuitionSigned(packet)) missing.push("tuition signature");
   if (!additionAgreementSigned(packet)) missing.push("enrollment agreement");
   if (!additionWaiverSigned(packet)) missing.push("liability waiver");
+  if (
+    packet.transferring_from_pinellas_public === true &&
+    packet.withdrawal_form_status !== "completed"
+  ) {
+    missing.push("public school withdrawal form");
+  }
   const packetFields: (keyof XanoStudentRegistration)[] = [
     "shirt_size",
     "pant_size",

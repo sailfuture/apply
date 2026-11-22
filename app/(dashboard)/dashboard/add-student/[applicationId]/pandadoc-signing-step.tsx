@@ -5,7 +5,10 @@ import { toast } from "sonner";
 import { CheckCircle2, Download, Loader2, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-type SigningType = "addition_enrollment_agreement" | "liability_waiver";
+type SigningType =
+  | "addition_enrollment_agreement"
+  | "liability_waiver"
+  | "withdrawal_form";
 
 /**
  * One PandaDoc document for a mid-year sibling — their own enrollment

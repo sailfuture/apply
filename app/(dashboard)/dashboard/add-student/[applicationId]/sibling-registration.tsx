@@ -227,6 +227,7 @@ export function SiblingRegistration({
           yearId={yearId}
           registrationTypeId={1}
           studentName={studentName}
+          applicationId={app.id}
           onSubmit={submitRegistration}
         />
       </div>

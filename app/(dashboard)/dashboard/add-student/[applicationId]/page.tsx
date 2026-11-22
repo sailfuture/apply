@@ -368,6 +368,7 @@ export default function AddStudentRegistrationPage() {
           yearId={app.registration_school_years_id}
           registrationTypeId={1}
           studentName={studentName}
+          applicationId={app.id}
         />
       </div>
     );
