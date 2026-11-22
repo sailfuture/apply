@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { describePlanChanges } from "@/lib/payment-plan";
 import {
   Activity,
+  AlertTriangle,
   ChevronRight,
   CreditCard,
   Download,
@@ -54,6 +55,8 @@ import type {
   BillingRowStatus,
   NotStartedRow,
 } from "@/app/api/admin/billing/route";
+import type { CloseYearResponse } from "@/app/api/admin/billing/close-year/route";
+import { formatTimestampUs } from "@/lib/us-date";
 import { exportBillingXlsx } from "@/lib/billing-export";
 import { APOSTROPHE_VARIANTS } from "@/lib/search-text";
 
@@ -127,6 +130,13 @@ export default function AdminBillingPage() {
   // it touches every paying family at once.
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
   const [closingYear, setClosingYear] = useState(false);
+  // Families the last close-out left running because their final
+  // invoice of the billing year hasn't gone out yet. Stays on the
+  // page (not just in a toast) until close-out is run again or the
+  // notice is dismissed: these families keep being billed until then.
+  const [closeOutWaiting, setCloseOutWaiting] = useState<
+    CloseYearResponse["waiting"]
+  >([]);
   async function closeYearBilling() {
     if (!yearId || closingYear) return;
     setClosingYear(true);
@@ -136,23 +146,36 @@ export default function AdminBillingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ yearId: Number(yearId) }),
       });
-      const result = await res.json().catch(() => null);
-      if (!res.ok) {
+      const result = (await res.json().catch(() => null)) as
+        | (CloseYearResponse & { error?: string })
+        | null;
+      if (!res.ok || !result) {
         throw new Error(result?.error ?? `Close-out failed (${res.status})`);
       }
-      const failed: Array<{ familyId: number }> = result?.failures ?? [];
-      if (failed.length > 0) {
-        toast.warning(
-          `Set ${result.canceled} of ${result.total} subscriptions to cancel — ` +
-            `${failed.length} failed (family ids ${failed
-              .map((f: { familyId: number }) => f.familyId)
-              .join(", ")}). Handle those from their family billing pages.`
-        );
-      } else {
-        toast.success(
-          `All ${result.canceled} subscription${result.canceled === 1 ? "" : "s"} set to cancel at period end.`
-        );
-      }
+      const failed = result.failures ?? [];
+      const waiting = result.waiting ?? [];
+      const alreadyEnding = result.alreadyEnding ?? 0;
+      setCloseOutWaiting(waiting);
+      const plural = (n: number) => (n === 1 ? "" : "s");
+      const parts = [
+        `${result.canceled} subscription${plural(result.canceled)} set to cancel at period end`,
+        ...(alreadyEnding > 0 ? [`${alreadyEnding} already ending`] : []),
+        ...(waiting.length > 0
+          ? [
+              `${waiting.length} left running until their last invoice of the year goes out`,
+            ]
+          : []),
+        ...(failed.length > 0
+          ? [
+              `${failed.length} failed (family ids ${failed
+                .map((f) => f.familyId)
+                .join(", ")}): handle those from their family billing pages`,
+            ]
+          : []),
+      ];
+      const message = `${parts.join(". ")}.`;
+      if (failed.length > 0 || waiting.length > 0) toast.warning(message);
+      else toast.success(message);
       setCloseConfirmOpen(false);
       void mutate();
     } catch (err) {
@@ -222,6 +245,60 @@ export default function AdminBillingPage() {
         </div>
       </div>
 
+      {/* Families the close-out skipped. Canceling at period end
+          stops the invoice due at the end of the current period, so a
+          family whose last invoice of the billing year hasn't gone
+          out yet is left running rather than cut a payment short.
+          They keep being billed until close-out is run again, which
+          is why this stays on the page instead of living in a toast. */}
+      {closeOutWaiting.length > 0 ? (
+        <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle
+            className="size-4 shrink-0 mt-0.5 text-amber-600"
+            aria-hidden="true"
+          />
+          <div className="min-w-0 flex-1 space-y-2">
+            <p className="font-medium">
+              {closeOutWaiting.length} famil
+              {closeOutWaiting.length === 1 ? "y is" : "ies are"} still
+              being billed
+            </p>
+            <p className="text-amber-800">
+              Their last invoice for this billing year hasn&rsquo;t gone
+              out yet, so close-out left them running. Run{" "}
+              <span className="font-medium">Close out year billing</span>{" "}
+              again after{" "}
+              <span className="font-medium">
+                {formatTimestampUs(
+                  closeOutWaiting[closeOutWaiting.length - 1].nextInvoiceAt
+                )}
+              </span>{" "}
+              to finish.
+            </p>
+            <ul className="space-y-0.5 text-amber-800">
+              {closeOutWaiting.map((w) => (
+                <li key={w.familyId} className="tabular-nums">
+                  <span className="font-medium text-amber-900">
+                    {rows.find((r) => r.family_id === w.familyId)
+                      ?.family_name ?? `Family #${w.familyId}`}
+                  </span>{" "}
+                  · next invoice {formatTimestampUs(w.nextInvoiceAt)}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 text-amber-900 hover:bg-amber-100 hover:text-amber-950"
+            onClick={() => setCloseOutWaiting([])}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : null}
+
       {/* Close-out warning modal — spells out exactly what happens
           before anything touches Stripe. */}
       <AlertDialog
@@ -259,6 +336,16 @@ export default function AdminBillingPage() {
                   generated after that.
                 </p>
                 <p>
+                  A family whose{" "}
+                  <span className="font-semibold text-foreground">
+                    last invoice for this billing year hasn&rsquo;t gone
+                    out yet
+                  </span>{" "}
+                  is left running, so nobody is cut off a payment
+                  short. You&rsquo;ll get a list of them with dates; run
+                  this again once those invoices have gone out.
+                </p>
+                <p>
                   Until a family&rsquo;s period actually ends, this is
                   reversible per family with the Uncancel button on
                   their billing page. Outstanding balances remain
@@ -291,7 +378,7 @@ export default function AdminBillingPage() {
                   Closing out…
                 </>
               ) : (
-                "Cancel all live subscriptions"
+                "Close out billing"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>

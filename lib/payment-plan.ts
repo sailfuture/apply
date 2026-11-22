@@ -80,6 +80,19 @@ export function billingSlotAt(
 }
 
 /**
+ * When the billing year ends (unix ms): the start of the month after
+ * its 12th. An invoice dated before this belongs to the year; one
+ * dated on or after it is next year's. Null with no billing start
+ * date.
+ */
+export function billingYearEndMs(
+  billingStartDate: string | null | undefined
+): number | null {
+  if (!hasBillingStart(billingStartDate)) return null;
+  return yearSlots(billingStartDate)[FULL_YEAR_PAYMENTS - 1].periodEndExclusive;
+}
+
+/**
  * How many payments a plan has when its first invoice goes out at
  * `firstInvoiceMs`: one per month slot from that one through the
  * year's last. 12 before the year starts (or with no billing start

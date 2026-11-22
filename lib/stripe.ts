@@ -591,6 +591,56 @@ export async function cancelSubscriptionAtPeriodEnd(
   });
 }
 
+/** What the year-end close-out needs to know about one subscription
+ *  before it touches it. */
+export interface CloseOutState {
+  /** Already on its way out: a cancellation is pending (set by an
+   *  earlier close-out, or by hand for a family that left) or it has
+   *  ended. Close-out leaves these alone. */
+  alreadyEnding: boolean;
+  /** When (unix ms) the next invoice that doesn't exist yet goes out:
+   *  the end of a held first invoice (trial / future anchor), else the
+   *  end of the current billing period. Canceling at period end stops
+   *  THAT invoice from ever being created. Null when Stripe's object
+   *  doesn't say. */
+  nextInvoiceMs: number | null;
+}
+
+/**
+ * Read one subscription for the year-end close-out. Canceling at
+ * period end means the invoice due at the end of the current period
+ * is never created, so the caller compares `nextInvoiceMs` with the
+ * end of the billing year: a family invoiced mid-month still has its
+ * last payment of the year ahead of it until that day has passed.
+ * One Stripe read, no writes.
+ */
+export async function getCloseOutState(
+  subscriptionId: string
+): Promise<CloseOutState> {
+  const stripe = getStripeClient();
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const alreadyEnding =
+    subscription.status === "canceled" ||
+    subscription.cancel_at_period_end === true ||
+    subscription.cancel_at != null;
+  let nextInvoiceUnix: number | null = null;
+  if (subscription.status === "trialing" && subscription.trial_end) {
+    nextInvoiceUnix = subscription.trial_end;
+  } else if (subscription.billing_cycle_anchor > nowUnix) {
+    nextInvoiceUnix = subscription.billing_cycle_anchor;
+  } else {
+    // Billing periods live on the items (flexible billing mode has no
+    // subscription-level current_period_end).
+    const cycleEnd = subscription.items.data[0]?.current_period_end;
+    nextInvoiceUnix = cycleEnd && cycleEnd > nowUnix ? cycleEnd : null;
+  }
+  return {
+    alreadyEnding,
+    nextInvoiceMs: nextInvoiceUnix ? nextInvoiceUnix * 1000 : null,
+  };
+}
+
 /** Reverse a pending cancellation. Clears `cancel_at_period_end` so
  *  the subscription continues normally past the current period end.
  *  Only meaningful while the cancellation is still pending — once
