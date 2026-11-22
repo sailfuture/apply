@@ -1294,7 +1294,12 @@ export default function RegistrationPage() {
     try {
       const results = await Promise.all(
         enrolledStudents.map(async (s) => {
-          const res = await fetch(`/api/student-registration?studentId=${s.id}`);
+          // Year-scoped: a re-enrolling student has one packet per
+          // year, and without `yearId` the API returns whichever Xano
+          // lists first (last year's).
+          const res = await fetch(
+            `/api/student-registration?studentId=${s.id}&yearId=${yearId}`
+          );
           if (res.ok) {
             const data = await res.json();
             // API may return null/empty if no registration exists

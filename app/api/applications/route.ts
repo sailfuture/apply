@@ -51,6 +51,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // The student id comes from the request body — it must be one of the
+  // caller's own students. Without this check the lookup just below
+  // handed back another family's application row for any student id,
+  // and the create filed someone else's student under this family.
+  const familyStudents = await xano.students.getByFamilyId(familyId);
+  if (!familyStudents.some((s) => s.id === Number(registration_students_id))) {
+    return NextResponse.json(
+      { error: "Student not found in family" },
+      { status: 403 }
+    );
+  }
+
   const existing = await xano.applications.getByStudentAndYear(
     registration_students_id,
     registration_school_years_id

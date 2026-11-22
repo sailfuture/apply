@@ -5,6 +5,10 @@ import { xano, ensureParentRecord, isStudentAccountEmail } from "@/lib/xano";
 import { smsConsentParentFields } from "@/lib/sms/consent";
 import { familyNameWithStudents } from "@/lib/family-name";
 import { studentAccountErrorBody } from "@/lib/student-accounts";
+import { pickAllowedFields } from "@/lib/scholarship-access";
+
+/** Columns of `registration_families` a parent may write via PATCH. */
+const PARENT_FAMILY_FIELDS = ["family_name"] as const;
 
 async function resolveParents(family: ReturnType<typeof xano.families.getById> extends Promise<infer T> ? T : never) {
   const embedded = xano.families.getEmbeddedParents(family);
@@ -254,10 +258,19 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "No family found" }, { status: 404 });
   }
 
-  const body = await req.json();
+  // Only the family name is a parent's to change here. The body used to
+  // be forwarded to Xano whole, so a hand-made request could rewrite the
+  // family's parent and student links (and with them, who can read and
+  // edit which rows), or any billing / admin column on the family row.
+  // The one caller — the Family step's name field — sends just this key;
+  // add a field to the list when a parent form genuinely needs it.
+  const body = pickAllowedFields(await req.json(), PARENT_FAMILY_FIELDS);
+  if (Object.keys(body).length === 0) {
+    return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+  }
   // A parent renaming the family keeps the "(Student, Student)" roster
   // suffix: they type the base name, the suffix follows the roster.
-  if (typeof body?.family_name === "string" && body.family_name.trim()) {
+  if (typeof body.family_name === "string" && body.family_name.trim()) {
     const students = await xano.students.getByFamilyId(familyId);
     body.family_name = familyNameWithStudents(
       body.family_name,

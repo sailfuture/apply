@@ -377,30 +377,51 @@ export default function TuitionPage() {
   // the old division printed a cent less than the family owes.
   const monthlyTotal = sumStudentMonthly(studentRows);
 
+  // Every pen stroke uploads a fresh snapshot of the whole pad, and the
+  // uploads finish in whatever order the network likes. Only the NEWEST
+  // snapshot may become the saved signature: a three-stroke signature
+  // used to be stored as its first stroke alone whenever that first
+  // upload happened to answer last. `sigUploadSeqRef` numbers each
+  // upload; anything but the latest is ignored when it lands.
+  const sigUploadSeqRef = useRef(0);
+
   async function handleSignatureEnd() {
     if (!sigCanvasRef.current || sigCanvasRef.current.isEmpty()) return;
     const dataUrl = sigCanvasRef.current.toDataURL("image/png");
+    const seq = ++sigUploadSeqRef.current;
+    // The pad just changed, so whatever was uploaded before is no longer
+    // the signature on screen. Drop it until this snapshot is stored —
+    // that also keeps "Complete" disabled if this upload fails.
+    setSignatureMeta(null);
     setSignatureUploading(true);
+    let meta: Record<string, unknown> | null = null;
     try {
       const blob = await fetch(dataUrl).then((r) => r.blob());
       const file = new File([blob], "tuition-signature.png", { type: "image/png" });
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch("/api/upload", { method: "POST", body: formData });
-      if (res.ok) {
-        const meta = await res.json();
-        setSignatureMeta(meta);
-      }
+      if (res.ok) meta = await res.json();
     } catch (err) {
       console.error("Signature upload failed:", err);
-    } finally {
-      setSignatureUploading(false);
+    }
+    // A newer stroke (or Clear) has superseded this snapshot.
+    if (seq !== sigUploadSeqRef.current) return;
+    setSignatureUploading(false);
+    if (meta) {
+      setSignatureMeta(meta);
+    } else {
+      toast.error("We couldn't save your signature. Please sign again.");
     }
   }
 
   function clearSignature() {
+    // Invalidate any upload still in flight so it can't bring the
+    // cleared signature back.
+    sigUploadSeqRef.current += 1;
     sigCanvasRef.current?.clear();
     setSignatureMeta(null);
+    setSignatureUploading(false);
   }
 
   async function handleSubmitReview(): Promise<void> {
@@ -430,6 +451,10 @@ export default function TuitionPage() {
         signature_data: signatureMeta,
         name: printedName.trim(),
       });
+      // Back to the read-only "submitted" view. Without this a section
+      // that was unlocked with "Click to Edit" stayed on the form after
+      // a successful re-submit, with a Complete button that did nothing.
+      setUnlocked(false);
       toast.success("Tuition review submitted successfully.");
     } catch {
       toast.error("Failed to submit tuition review. Please try again.");

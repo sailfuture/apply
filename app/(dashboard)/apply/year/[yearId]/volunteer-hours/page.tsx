@@ -138,30 +138,52 @@ export default function VolunteerHoursPage() {
     }
   }, [signatureMeta, signatureUploading, submitting, acknowledged, unlocked, regProgress, printedName, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Every pen stroke uploads a fresh snapshot of the whole pad, and the
+  // uploads finish in whatever order the network likes. Only the NEWEST
+  // snapshot may become the saved signature — otherwise a multi-stroke
+  // signature is stored as whichever stroke's upload answered last
+  // (seen on the tuition step: three strokes drawn, one saved).
+  // `sigUploadSeqRef` numbers each upload; anything but the latest is
+  // ignored when it lands.
+  const sigUploadSeqRef = useRef(0);
+
   async function handleSignatureEnd() {
     if (!sigCanvasRef.current || sigCanvasRef.current.isEmpty()) return;
     const dataUrl = sigCanvasRef.current.toDataURL("image/png");
+    const seq = ++sigUploadSeqRef.current;
+    // The pad just changed, so whatever was uploaded before is no longer
+    // the signature on screen. Drop it until this snapshot is stored —
+    // that also keeps the button disabled if this upload fails.
+    setSignatureMeta(null);
     setSignatureUploading(true);
+    let meta: Record<string, unknown> | null = null;
     try {
       const blob = await fetch(dataUrl).then((r) => r.blob());
       const file = new File([blob], "volunteer-signature.png", { type: "image/png" });
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch("/api/upload", { method: "POST", body: formData });
-      if (res.ok) {
-        const meta = await res.json();
-        setSignatureMeta(meta);
-      }
+      if (res.ok) meta = await res.json();
     } catch (err) {
       console.error("Volunteer signature upload failed:", err);
-    } finally {
-      setSignatureUploading(false);
+    }
+    // A newer stroke (or Clear) has superseded this snapshot.
+    if (seq !== sigUploadSeqRef.current) return;
+    setSignatureUploading(false);
+    if (meta) {
+      setSignatureMeta(meta);
+    } else {
+      toast.error("We couldn't save your signature. Please sign again.");
     }
   }
 
   function clearSignature() {
+    // Invalidate any upload still in flight so it can't bring the
+    // cleared signature back.
+    sigUploadSeqRef.current += 1;
     sigCanvasRef.current?.clear();
     setSignatureMeta(null);
+    setSignatureUploading(false);
   }
 
   async function handleAcknowledge(): Promise<void> {
@@ -188,6 +210,10 @@ export default function VolunteerHoursPage() {
           signed_at: new Date().toISOString(),
         },
       });
+      // Back to the read-only "acknowledged" view. Without this a
+      // section that was unlocked with "Click to Edit" stayed on the form
+      // after a successful re-submit, with a button that did nothing.
+      setUnlocked(false);
       toast.success("Volunteer hours acknowledgment recorded.");
     } catch {
       toast.error("Failed to record acknowledgment. Please try again.");

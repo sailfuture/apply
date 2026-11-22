@@ -1,6 +1,7 @@
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { denyPacketAccess, stripReadonlyFields } from "@/lib/family-access";
 import {
   SUFS_ADMIN_FIELDS,
   redactAdminSufs,
@@ -16,7 +17,18 @@ export async function PATCH(
   if (!familyId) return NextResponse.json({ error: "No family found" }, { status: 400 });
 
   const { id } = await params;
-  const body = await req.json();
+
+  // The packet id comes from the URL — make sure it belongs to a
+  // student in the caller's own family before anything is written. See
+  // lib/family-access.ts.
+  const denied = await denyPacketAccess(id);
+  if (denied) return denied;
+
+  // The primary key and the student link are never a parent's to write
+  // (the forms spread the whole packet, so both ride along).
+  const body = stripReadonlyFields(await req.json(), [
+    "registration_students_id",
+  ]);
 
   // Admin-owned columns on `registration_student_registration` that a
   // parent must never write. Both parent registration forms — the
@@ -43,6 +55,9 @@ export async function PATCH(
     "crew_assignment",
     "previous_crew_assignment",
     "crew_assignment_change",
+    // Billing owns this: a stale copy riding along in a spread-packet
+    // save would point the packet back at a removed Stripe item.
+    "stripe_subscription_item_id",
   ];
   // Mid-year sibling registration state (see `lib/midyear-additions.ts`)
   // is written only by `/api/student-additions/[applicationId]` and the
@@ -96,6 +111,12 @@ export async function PATCH(
   return NextResponse.json(redactAdminSufs(updated), { status: 200 });
 }
 
+/**
+ * A parent removing one of their own students from this year's
+ * registration (the trash button on the registration step). Any parent
+ * on the family may do it; nobody may do it to another family's packet
+ * — until 2026-11-22 the id in the URL was not checked at all.
+ */
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -106,6 +127,10 @@ export async function DELETE(
   if (!familyId) return NextResponse.json({ error: "No family found" }, { status: 400 });
 
   const { id } = await params;
+
+  const denied = await denyPacketAccess(id);
+  if (denied) return denied;
+
   await xano.studentRegistration.delete(Number(id));
 
   return NextResponse.json({ ok: true }, { status: 200 });

@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { syncFamilyNameWithStudents } from "@/lib/family-name-sync";
+import { denyStudentAccess, stripReadonlyFields } from "@/lib/family-access";
 
 export async function PATCH(
   req: NextRequest,
@@ -18,6 +19,12 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid student ID" }, { status: 400 });
   }
 
+  // The id comes from the URL — make sure this student is in the
+  // caller's own family before anything is written. See
+  // lib/family-access.ts.
+  const denied = await denyStudentAccess(studentId);
+  if (denied) return denied;
+
   const body = await req.json();
 
   try {
@@ -25,8 +32,9 @@ export async function PATCH(
     // here from the apply-flow students page and the registration
     // packet, and the enrolled detail page's last-edited captions
     // need to reflect those changes. Mirrors the admin students
-    // route's same bump.
-    const patch = { ...body, last_edited_time: Date.now() };
+    // route's same bump. The family link and primary key are never a
+    // parent's to write.
+    const patch = { ...stripReadonlyFields(body), last_edited_time: Date.now() };
     const updated = await xano.students.update(studentId, patch);
     // The family name lists first names; keep it current on a rename.
     if (typeof body?.first_name === "string") {

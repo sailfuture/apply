@@ -47,6 +47,11 @@ export default function EnrollmentSigningPage() {
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const [signingLoading, setSigningLoading] = useState(false);
   const [signingSession, setSigningSession] = useState<{ sessionId: string; documentId: string } | null>(null);
+  // Preparing the document failed. The auto-open effect only fires once
+  // per mount (`autoInitRef`), so without this the page sat on "Loading
+  // enrollment agreement..." forever after a single failed create.
+  // "Try again" clears it and asks again.
+  const [prepFailed, setPrepFailed] = useState(false);
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoInitRef = useRef(false);
@@ -135,6 +140,7 @@ export default function EnrollmentSigningPage() {
     }
     const app = applications[0];
 
+    setPrepFailed(false);
     setSigningLoading(true);
     try {
       const res = await fetch("/api/pandadoc/create", {
@@ -151,8 +157,14 @@ export default function EnrollmentSigningPage() {
         if (res.status === 409) {
           return;
         }
+        // The route's error is the provider's raw message (status code
+        // and JSON included) — fine for the log, not for a parent.
         const body = await res.json().catch(() => null);
-        toast.error(body?.error ?? "Failed to prepare document.");
+        console.error("Enrollment agreement could not be prepared:", body?.error ?? res.status);
+        toast.error(
+          "We couldn't prepare your enrollment agreement. Please try again."
+        );
+        setPrepFailed(true);
         return;
       }
 
@@ -183,7 +195,10 @@ export default function EnrollmentSigningPage() {
       setSigningSession({ sessionId, documentId });
       startPolling(documentId);
     } catch {
-      toast.error("Failed to initiate signing.");
+      toast.error(
+        "We couldn't prepare your enrollment agreement. Please try again."
+      );
+      setPrepFailed(true);
     } finally {
       setSigningLoading(false);
     }
@@ -359,7 +374,11 @@ export default function EnrollmentSigningPage() {
             ? "This document has been signed and completed."
             : signingSession
               ? "Review and sign the enrollment agreement below."
-              : "Your enrollment agreement is being prepared. Signing will load in this page as soon as it's ready."}
+              : prepFailed
+                ? "We couldn't prepare your enrollment agreement. Please try again, or contact the school if it keeps happening."
+                : applications.length === 0
+                  ? "Add a student to your registration before signing the enrollment agreement."
+                  : "Your enrollment agreement is being prepared. Signing will load in this page as soon as it's ready."}
         </p>
       </div>
 
@@ -434,6 +453,20 @@ export default function EnrollmentSigningPage() {
                     Preparing enrollment agreement...
                   </span>
                 </>
+              ) : prepFailed ? (
+                // Preparing failed (toast already shown): offer a retry
+                // instead of a placeholder that never resolves.
+                <Button
+                  variant="outline"
+                  className="bg-white"
+                  onClick={() => void handleSign()}
+                >
+                  Try again
+                </Button>
+              ) : applications.length === 0 ? (
+                <span className="text-sm text-muted-foreground">
+                  No student on this registration yet.
+                </span>
               ) : (
                 <span className="text-sm text-muted-foreground">
                   Loading enrollment agreement...

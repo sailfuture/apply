@@ -14,36 +14,61 @@ async function handleGET(req: NextRequest) {
   const studentId = url.searchParams.get("studentId");
   const yearIdParam = url.searchParams.get("yearId");
 
-  if (studentId) {
-    const reg = await xano.studentRegistration.getByStudentId(Number(studentId));
-    return NextResponse.json(redactAdminSufs(reg), { status: 200 });
-  }
-
   const students = await xano.students.getByFamilyId(familyId);
 
+  let yearId: number | null = null;
   if (yearIdParam) {
-    // Return every packet in this family for the requested year. Used by
-    // the pending-confirmation view to check whether every student has
-    // been admin-confirmed yet.
-    const yearId = Number(yearIdParam);
+    yearId = Number(yearIdParam);
     if (!Number.isFinite(yearId)) {
       return NextResponse.json({ error: "yearId must be a number" }, { status: 400 });
     }
+  }
+
+  if (studentId) {
+    // The student id comes from the query string — only the caller's
+    // own students. This used to return any student's packet (health,
+    // Medicaid, pickup lists) to any signed-in parent.
+    const sid = Number(studentId);
+    if (!students.some((s) => s.id === sid)) {
+      return NextResponse.json({ error: "Student not found in family" }, { status: 403 });
+    }
+    // With `yearId` the read is scoped to that year's packet. A
+    // re-enrolling student has one packet per year, and the un-scoped
+    // read returns whichever Xano lists first — the registration step
+    // was loading (and saving over) last year's packet for them.
+    // Callers that don't pass a year keep the old behaviour.
+    const reg =
+      yearId !== null
+        ? await xano.studentRegistration.getByStudentAndYear(sid, yearId)
+        : await xano.studentRegistration.getByStudentId(sid);
+    return NextResponse.json(redactAdminSufs(reg), { status: 200 });
+  }
+
+  if (yearId !== null) {
+    // Return every packet in this family for the requested year. Used by
+    // the pending-confirmation view to check whether every student has
+    // been admin-confirmed yet. Year-scoped per student for the same
+    // reason as above: reading each student's FIRST packet and then
+    // filtering by year dropped every re-enrolling student from the
+    // list, so their family never resolved as enrolled here while the
+    // `/` resolver (which already reads by student AND year) said it
+    // was.
+    const scopedYearId = yearId;
     const packets = await Promise.all(
-      students.map((s) => xano.studentRegistration.getByStudentId(s.id))
+      students.map((s) =>
+        xano.studentRegistration.getByStudentAndYear(s.id, scopedYearId)
+      )
     );
     return NextResponse.json(
       packets
-        .filter(
-          (p): p is NonNullable<typeof p> =>
-            !!p && Number(p.registration_school_years_id) === yearId
-        )
+        .filter((p): p is NonNullable<typeof p> => !!p)
         .map(redactAdminSufs),
       { status: 200 }
     );
   }
 
   // Return all registrations for students in this family (legacy callers).
+  // `students` was loaded above.
   const registrations = await Promise.all(
     students.map((s) => xano.studentRegistration.getByStudentId(s.id))
   );
