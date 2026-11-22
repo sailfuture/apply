@@ -596,6 +596,8 @@ export default function StudentsStepPage() {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(dirty),
+          // Lets a save that starts as the page is being left finish.
+          keepalive: true,
         });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
@@ -743,12 +745,19 @@ export default function StudentsStepPage() {
     }
   }, [applications, savedApplications, savingAll]);
 
-  // Cancel any in-flight per-app timers on unmount so a setTimeout
-  // doesn't fire against a stale `applications` snapshot.
+  // Leaving the page with a save still waiting on its 2-second timer:
+  // send it now. This used to just cancel the timers, so an edit made
+  // right before clicking another step (or "Return to Dashboard") was
+  // dropped without a word. `saveSingleAppRef` is refreshed every
+  // render, so it still holds the latest field values here; the PATCH
+  // carries `keepalive` so it also survives the tab closing.
   useEffect(() => {
     const timers = autoSaveTimersRef.current;
     return () => {
-      for (const t of timers.values()) clearTimeout(t);
+      for (const [appId, t] of timers) {
+        clearTimeout(t);
+        void saveSingleAppRef.current(appId);
+      }
       timers.clear();
     };
   }, []);

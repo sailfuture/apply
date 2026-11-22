@@ -503,6 +503,8 @@ export function FinancialAidStep({
   const savedSnapshotRef = useRef<string>("");
   const initialSnapshotRef = useRef<string>("");
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while an autosave is scheduled but has not fired yet. */
+  const autoSavePendingRef = useRef(false);
   const savingRef = useRef(false);
   const handleSaveRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
@@ -1250,10 +1252,16 @@ export function FinancialAidStep({
 
   useEffect(() => {
     if (savedSnapshotRef.current === "" || savingRef.current) return;
-    if (currentSnapshotMemo === savedSnapshotRef.current) return;
+    if (currentSnapshotMemo === savedSnapshotRef.current) {
+      // Nothing left to save (a manual save caught up).
+      autoSavePendingRef.current = false;
+      return;
+    }
 
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSavePendingRef.current = true;
     autoSaveTimerRef.current = setTimeout(() => {
+      autoSavePendingRef.current = false;
       if (!savingRef.current) handleSaveRef.current?.();
     }, 4000);
 
@@ -1262,6 +1270,19 @@ export function FinancialAidStep({
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSnapshotMemo]);
+
+  // Leaving the step with an autosave still waiting on its 4-second
+  // timer: send it now. The cleanup above cancels the timer (it has to,
+  // it also runs between keystrokes), which on its own dropped whatever
+  // was typed just before the parent moved to another step. Declared
+  // after that effect so its cleanup runs second, on unmount only.
+  useEffect(() => {
+    return () => {
+      if (!autoSavePendingRef.current) return;
+      autoSavePendingRef.current = false;
+      if (!savingRef.current) handleSaveRef.current?.();
+    };
+  }, []);
 
   function patchMemberLocal(id: number, data: Partial<ContributingMember>) {
     setMembers((prev) =>

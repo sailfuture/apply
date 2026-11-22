@@ -1205,7 +1205,10 @@ export default function YearOverviewPage() {
             // Stay on the dashboard; the "Application Submitted" banner
             // renders because `progress.isSubmitted` is now true.
           } catch {
-            // Leave modal open so the user can retry.
+            // Leave modal open so the user can retry, and say so.
+            toast.error("We couldn't submit that. Please try again.", {
+              id: "submit-failed",
+            });
           } finally {
             setSubmitting(false);
           }

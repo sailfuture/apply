@@ -37,11 +37,29 @@ async function handleGET(req: NextRequest) {
     // read returns whichever Xano lists first — the registration step
     // was loading (and saving over) last year's packet for them.
     // Callers that don't pass a year keep the old behaviour.
-    const reg =
-      yearId !== null
-        ? await xano.studentRegistration.getByStudentAndYear(sid, yearId)
-        : await xano.studentRegistration.getByStudentId(sid);
-    return NextResponse.json(redactAdminSufs(reg), { status: 200 });
+    if (yearId === null) {
+      const reg = await xano.studentRegistration.getByStudentId(sid);
+      return NextResponse.json(redactAdminSufs(reg), { status: 200 });
+    }
+    // The year-scoped read is the one the registration step edits from,
+    // so a failed read must not look like "no packet yet": answer 503
+    // and let the page offer a retry instead of a blank form.
+    try {
+      const reg = await xano.studentRegistration.getByStudentAndYearStrict(
+        sid,
+        yearId
+      );
+      return NextResponse.json(redactAdminSufs(reg), { status: 200 });
+    } catch (err) {
+      console.error(
+        `[/api/student-registration] packet read failed for student ${sid}, year ${yearId}:`,
+        err
+      );
+      return NextResponse.json(
+        { error: "Registration lookup failed, please retry" },
+        { status: 503 }
+      );
+    }
   }
 
   if (yearId !== null) {

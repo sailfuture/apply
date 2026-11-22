@@ -5751,6 +5751,41 @@ export const xano = {
     },
 
     /**
+     * `getByStudentAndYear`, but a failed read THROWS instead of
+     * answering "no packet". The loose variant folds a Xano error into
+     * `null`, which the registration step then rendered as a blank
+     * packet with no id — the parent retyped everything and none of it
+     * was saved. Callers that show the packet for editing use this one
+     * so a failed read becomes an error they can retry.
+     */
+    async getByStudentAndYearStrict(
+      studentId: number,
+      yearId: number
+    ): Promise<XanoStudentRegistration | null> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      }
+      const results = await res.json();
+      const all = (Array.isArray(results) ? results : []).filter(
+        (r: XanoStudentRegistration) =>
+          toIdOrNull(r.registration_students_id) === studentId &&
+          toIdOrNull(r.registration_school_years_id) === yearId
+      );
+      if (all.length <= 1) return all[0] ?? null;
+      // Same keeper rule as `getByStudentAndYear`.
+      return all.slice().sort((a, b) => {
+        const aT = a.last_edited_time ?? a.created_at ?? 0;
+        const bT = b.last_edited_time ?? b.created_at ?? 0;
+        if (aT !== bT) return bT - aT;
+        return a.id - b.id;
+      })[0];
+    },
+
+    /**
      * Read every packet matching `(studentId, yearId)` without
      * deduping. Used by the resolve mutex's pre/post create checks
      * AND by `getByStudentAndYear` (which picks one keeper). FK

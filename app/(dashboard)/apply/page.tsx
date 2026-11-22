@@ -13,6 +13,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { LoadingScreen } from "@/components/loading-screen";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -78,12 +79,25 @@ export default function ApplyIndexPage() {
   const [submittedYears, setSubmittedYears] = useState<number[]>([]);
   const [confirmYear, setConfirmYear] = useState<SchoolYear | null>(null);
 
+  // The school-years read failed. Without this the page fell through to
+  // "No school years are open right now" — telling a brand-new parent
+  // the school is closed because of one bad response, with no way to
+  // retry.
+  const [loadFailed, setLoadFailed] = useState(false);
+
   const fetchData = useCallback(async () => {
+    // Set when this run hands off to a year page: the loader then stays
+    // up through the navigation instead of flashing the empty chooser.
+    let redirecting = false;
     try {
       const [yearsRes, appsRes] = await Promise.all([
         fetch("/api/school-years"),
         fetch("/api/applications"),
       ]);
+      if (!yearsRes.ok) {
+        setLoadFailed(true);
+        return;
+      }
 
       // Xano may return the year FK as a raw id or an expanded object.
       const appYearIds = new Set<number>();
@@ -125,6 +139,7 @@ export default function ApplyIndexPage() {
         // choice to make, so skip straight to it.
         const only = active && next ? null : (active ?? next);
         if (only && others.length === 0) {
+          redirecting = true;
           router.replace(`/apply/year/${only.id}`);
           return;
         }
@@ -135,8 +150,9 @@ export default function ApplyIndexPage() {
       }
     } catch (err) {
       console.error("Failed to fetch data:", err);
+      setLoadFailed(true);
     } finally {
-      setLoading(false);
+      if (!redirecting) setLoading(false);
     }
   }, [router]);
 
@@ -188,6 +204,20 @@ export default function ApplyIndexPage() {
           <LoadingScreen />
         </div>
       </>
+    );
+  }
+
+  // The years couldn't be loaded: offer a retry rather than claim that
+  // nothing is open.
+  if (loadFailed) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          void fetchData();
+        }}
+      />
     );
   }
 

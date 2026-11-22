@@ -780,6 +780,8 @@ export default function RegistrationPage() {
   // rule as the SWR hooks above: only an error with nothing behind it
   // blocks the page.
   const [loadFailed, setLoadFailed] = useState(false);
+  // A student's packet could not be read (as opposed to: has no packet).
+  const [packetsLoadFailed, setPacketsLoadFailed] = useState(false);
   const loadedOnceRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [pendingDeleteContact, setPendingDeleteContact] = useState<{ id: number; name: string } | null>(null);
@@ -901,6 +903,20 @@ export default function RegistrationPage() {
   // PandaDoc signing for per-student liability waivers
   // ---------------------------------------------------------------------------
 
+  // The waiver turned out to be signed already: the parent finished it
+  // in PandaDoc but closed the tab before this page recorded it. The
+  // create route syncs the packet and answers `{ completed: true }` with
+  // NO signing session, so there is nothing to open. Opening the signing
+  // overlay anyway (as this did) left "Preparing your liability
+  // waiver…" on screen with no way out but a reload.
+  function markWaiverAlreadySigned(studentId: number, documentId?: string) {
+    if (documentId) {
+      updateRegistration(studentId, "liability_waiver_pandadoc_id", documentId);
+    }
+    updateRegistration(studentId, "liability_waiver_status", "completed");
+    toast.success("This liability waiver is already signed.");
+  }
+
   async function handleSignWaiver(studentId: number) {
     const app = yearApps.find((a) => a.registration_students_id === studentId);
     if (!app) return;
@@ -924,10 +940,16 @@ export default function RegistrationPage() {
         });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
-          toast.error(body?.error ?? "Failed to prepare document.");
+          console.error("Liability waiver could not be prepared:", body?.error ?? res.status);
+          toast.error("We couldn't prepare the liability waiver. Please try again.");
           return;
         }
-        const { documentId, sessionId } = await res.json();
+        const data = await res.json();
+        if (data.completed) {
+          markWaiverAlreadySigned(studentId, data.documentId);
+          return;
+        }
+        const { documentId, sessionId } = data;
         setSigningSession({ sessionId, documentId, studentId, applicationId: app.id, docType: "liability_waiver" });
         setSigningStudentId(studentId);
         startWaiverPolling(documentId, studentId, regId);
@@ -953,11 +975,17 @@ export default function RegistrationPage() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        toast.error(body?.error ?? "Failed to prepare document.");
+        console.error("Liability waiver could not be prepared:", body?.error ?? res.status);
+        toast.error("We couldn't prepare the liability waiver. Please try again.");
         return;
       }
 
-      const { documentId, sessionId } = await res.json();
+      const data = await res.json();
+      if (data.completed) {
+        markWaiverAlreadySigned(studentId, data.documentId);
+        return;
+      }
+      const { documentId, sessionId } = data;
 
       // Save PandaDoc ID to student registration record
       if (regId) {
@@ -1300,12 +1328,17 @@ export default function RegistrationPage() {
           const res = await fetch(
             `/api/student-registration?studentId=${s.id}&yearId=${yearId}`
           );
-          if (res.ok) {
-            const data = await res.json();
-            // API may return null/empty if no registration exists
-            if (data && typeof data === "object" && data.id) {
-              return data as StudentRegistration;
-            }
+          // A failed read is NOT "no packet": bail out to the catch
+          // below, which shows the retry card. Treating it as empty
+          // rendered a blank form for a student who had already filled
+          // theirs in, and nothing typed into it was saved.
+          if (!res.ok) {
+            throw new Error(`Packet read failed (${res.status})`);
+          }
+          const data = await res.json();
+          // The API answers null when no registration exists yet.
+          if (data && typeof data === "object" && data.id) {
+            return data as StudentRegistration;
           }
           return null;
         })
@@ -1355,8 +1388,10 @@ export default function RegistrationPage() {
           return next;
         });
       }
+      setPacketsLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch student registrations:", err);
+      setPacketsLoadFailed(true);
     }
   }, [enrolledStudents]);
 
@@ -1918,8 +1953,13 @@ export default function RegistrationPage() {
   // Only an error with NO data behind it counts; a failed background
   // revalidation keeps the page on screen. "Try again" re-runs the load
   // and refetches every parent-API SWR key in place.
+  // The packets count too, but only while none are on screen: a failed
+  // re-read after an upload keeps the form (and what's typed in it).
+  const packetsBlocked =
+    packetsLoadFailed && Object.keys(registrations).length === 0;
   const blockingError =
     loadFailed ||
+    packetsBlocked ||
     (!studentsData && studentsError) ||
     (!applicationsData && applicationsError);
   if (blockingError) {
@@ -1927,8 +1967,10 @@ export default function RegistrationPage() {
       <ServiceUnavailable
         onRetry={() => {
           setLoadFailed(false);
+          setPacketsLoadFailed(false);
           setLoading(true);
           void fetchData();
+          void fetchRegistrations();
           void swrMutate(
             (key) => typeof key === "string" && key.startsWith("/api/")
           );
@@ -2416,6 +2458,20 @@ export default function RegistrationPage() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+                            {/* No packet on file for this student (admissions
+                                creates it at acceptance). The save skips a
+                                packet with no id, so say so instead of letting
+                                the parent fill in a form that goes nowhere. */}
+                            {!reg.id && (
+                              <div
+                                role="alert"
+                                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
+                              >
+                                This student&apos;s registration isn&apos;t set up
+                                yet, so nothing entered below will be saved.
+                                Please contact the school.
+                              </div>
+                            )}
                             {/* Student Information — evergreen contact info
                                 on the student record (not the per-year
                                 packet). Optional; persists on blur. */}

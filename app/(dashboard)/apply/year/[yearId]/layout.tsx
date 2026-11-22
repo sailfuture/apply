@@ -32,6 +32,7 @@ import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submi
 import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
+import { toast } from "sonner";
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -433,8 +434,11 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
             setPreSubmitOpen(false);
             router.push(basePath);
           } catch {
-            // Keep the modal open so they can retry — error toast is handled
-            // by trackAutosave inside the hook's submit().
+            // Keep the modal open so they can retry, and say so. The id
+            // de-dupes against any toast the submit helper already raised.
+            toast.error("We couldn't submit that. Please try again.", {
+              id: "submit-failed",
+            });
           } finally {
             setSubmitting(false);
           }

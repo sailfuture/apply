@@ -184,10 +184,15 @@ export function PreSubmitReviewModal({
             disabled={!allReady || submitting}
             className="w-full"
             onClick={(e) => {
-              if (!allReady) {
-                e.preventDefault();
-                return;
-              }
+              // Always keep the dialog under the caller's control. Radix
+              // closes an AlertDialog on any action click, so without
+              // this the dialog vanished the instant Submit was pressed:
+              // "Submitting…" was never seen, the page sat idle while the
+              // save ran, and a failed save left nothing on screen to
+              // retry from. Both callers close it themselves once
+              // `onConfirm` succeeds and leave it open when it throws.
+              e.preventDefault();
+              if (!allReady) return;
               void onConfirm();
             }}
           >
