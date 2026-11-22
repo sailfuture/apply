@@ -97,7 +97,9 @@ async function handleEvent(ev: WebhookEvent): Promise<void> {
   if (
     (docType !== "liability_waiver" &&
       docType !== "enrollment_agreement" &&
-      docType !== "addition_enrollment_agreement") ||
+      docType !== "addition_enrollment_agreement" &&
+      docType !== "lunch_letter" &&
+      docType !== "withdrawal_form") ||
     !Number.isFinite(yearId)
   ) {
     return;
@@ -157,6 +159,51 @@ async function handleEvent(ev: WebhookEvent): Promise<void> {
       await xano.studentRegistration.update(packet.id, {
         addition_enrollment_agreement_status: normalizedStatus,
         ...(wantCompleted ? { addition_enrollment_agreement_pdf_url: pdfUrl } : {}),
+      });
+    }
+    return;
+  }
+
+  // withdrawal_form: on the student's packet. Read, never resolve: a
+  // webhook must not create a packet. Exact-id guard as elsewhere.
+  if (docType === "withdrawal_form") {
+    if (!Number.isFinite(studentId)) return;
+    const packet = await xano.studentRegistration.getByStudentAndYear(
+      studentId,
+      yearId
+    );
+    if (!packet || packet.withdrawal_form_pandadoc_id !== documentId) return;
+    if (packet.withdrawal_form_status !== normalizedStatus) {
+      await xano.studentRegistration.update(packet.id, {
+        withdrawal_form_status: normalizedStatus,
+        ...(wantCompleted ? { withdrawal_form_pdf_url: pdfUrl } : {}),
+      });
+    }
+    return;
+  }
+
+  // lunch_letter: family-level progress row. Exact-id guard: the create
+  // route persists the id before PandaDoc can emit anything for it.
+  if (docType === "lunch_letter") {
+    if (!Number.isFinite(familyId)) return;
+    const row = await xano.studentRegistrationProgress.resolve(
+      familyId,
+      yearId
+    );
+    if (row.lunch_letter_pandadoc_id !== documentId) return;
+    const latched = row.isLunchLetter === true;
+    // An admin verify also marks the letter complete (a paper copy).
+    // A "viewed" on an envelope that happens to be out must not undo it.
+    const nextLatch =
+      wantCompleted || row.lunch_letter_admin_confirm === true;
+    if (
+      row.lunch_letter_status !== normalizedStatus ||
+      latched !== nextLatch
+    ) {
+      await xano.studentRegistrationProgress.update(row.id, {
+        lunch_letter_status: normalizedStatus,
+        isLunchLetter: nextLatch,
+        ...(wantCompleted ? { lunch_letter_pdf_url: pdfUrl } : {}),
       });
     }
     return;

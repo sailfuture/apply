@@ -19,6 +19,8 @@ export async function GET(req: NextRequest) {
     | "liability_waiver"
     | "enrollment_agreement"
     | "addition_enrollment_agreement"
+    | "lunch_letter"
+    | "withdrawal_form"
     | null;
   // Optional — when present, the ownership lookup below uses the
   // server-side-filtered by-family query instead of a full-table scan.
@@ -86,7 +88,59 @@ export async function GET(req: NextRequest) {
         yearId
       );
 
-      if (application && type === "addition_enrollment_agreement") {
+      if (application && type === "withdrawal_form") {
+        // Public school withdrawal form, on the student's packet. This
+        // route (with the webhook) is the only writer of its status: the
+        // parent packet PATCH strips these fields. Read, not resolve, and
+        // only for the exact envelope stored on the packet.
+        const packetRow = await xano.studentRegistration.getByStudentAndYear(
+          application.registration_students_id,
+          application.registration_school_years_id
+        );
+        if (
+          packetRow &&
+          packetRow.withdrawal_form_pandadoc_id === documentId &&
+          packetRow.withdrawal_form_status !== normalizedStatus
+        ) {
+          await xano.studentRegistration.update(packetRow.id, {
+            withdrawal_form_status: normalizedStatus,
+            ...(normalizedStatus === "completed"
+              ? { withdrawal_form_pdf_url: getDocumentDownloadUrl(documentId) }
+              : {}),
+          });
+        }
+      } else if (application && type === "lunch_letter") {
+        // Family-level, on the registration progress row. This route is
+        // the ONLY way the parent's browser can latch `isLunchLetter`:
+        // the progress PATCH doesn't accept it, so the section can't be
+        // marked signed without PandaDoc saying the envelope stored on
+        // this row is completed. A non-completed status clears the latch
+        // (envelope reopened or voided in the PandaDoc dashboard).
+        const progressRow = await xano.studentRegistrationProgress.resolve(
+          familyId,
+          application.registration_school_years_id
+        );
+        if (progressRow.lunch_letter_pandadoc_id === documentId) {
+          const wantCompleted = normalizedStatus === "completed";
+          const latched = progressRow.isLunchLetter === true;
+          // An admin verify also marks the letter complete (a paper
+          // copy); a "viewed" envelope must not undo that.
+          const nextLatch =
+            wantCompleted || progressRow.lunch_letter_admin_confirm === true;
+          if (
+            progressRow.lunch_letter_status !== normalizedStatus ||
+            latched !== nextLatch
+          ) {
+            await xano.studentRegistrationProgress.update(progressRow.id, {
+              lunch_letter_status: normalizedStatus,
+              isLunchLetter: nextLatch,
+              ...(wantCompleted
+                ? { lunch_letter_pdf_url: getDocumentDownloadUrl(documentId) }
+                : {}),
+            });
+          }
+        }
+      } else if (application && type === "addition_enrollment_agreement") {
         // A mid-year sibling's own agreement, on their packet. Read, not
         // resolve: the packet exists only once admissions accepts them.
         const packetRow = await xano.studentRegistration.getByStudentAndYear(

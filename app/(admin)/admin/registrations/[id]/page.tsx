@@ -26,6 +26,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { SendLunchLetterButton } from "@/components/admin/send-lunch-letter-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -232,6 +233,7 @@ export default function FamilyRegistrationDetailPage() {
     | "enrollment"
     | "registration"
     | "volunteer"
+    | "lunch_letter"
     | "emergency_contacts"
     | null
   >(null);
@@ -422,6 +424,10 @@ export default function FamilyRegistrationDetailPage() {
       completed: !!progress?.isVolunteerHours,
       verified: progress?.volunteer_admin_confirm === true,
     },
+    lunch_letter: {
+      completed: progress?.isLunchLetter === true,
+      verified: progress?.lunch_letter_admin_confirm === true,
+    },
     // Family-level Confirmation card status — green once the
     // family-level latch is flipped via the Confirm Registration
     // button on the card. Admin-only row, so there's no separate
@@ -464,6 +470,7 @@ export default function FamilyRegistrationDetailPage() {
       | "enrollment_admin_confirm"
       | "is_registration_admin_confirm"
       | "volunteer_admin_confirm"
+      | "lunch_letter_admin_confirm"
       | "emergency_contacts_admin_confirm",
     next: boolean,
     section:
@@ -471,6 +478,7 @@ export default function FamilyRegistrationDetailPage() {
       | "enrollment"
       | "registration"
       | "volunteer"
+      | "lunch_letter"
       | "emergency_contacts"
   ) => {
     setSavingSection(section);
@@ -1029,6 +1037,48 @@ export default function FamilyRegistrationDetailPage() {
             <VolunteerHoursBlock progress={progress} />
           </SectionShell>
         </section>
+
+        <section id="section-lunch-letter" className="scroll-mt-20">
+          {/* Free and reduced lunch letter: one PandaDoc per family per
+              year. Verifying marks it complete, which is how a paper
+              copy handed to the office gets recorded. */}
+          <SectionShell
+            title="Free & Reduced Lunch Letter"
+            status={sectionStatus.lunch_letter.completed ? "complete" : "in_progress"}
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-lunch-letter",
+              title: "Notes — Lunch Letter",
+            }}
+            verify={{
+              sectionLabel: "Lunch Letter",
+              verified: progress?.lunch_letter_admin_confirm === true,
+              parentCompleted: progress?.isLunchLetter === true,
+              verifiedTime: progress?.lunch_letter_admin_confirm_time ?? null,
+              verifiedByName:
+                progress?.lunch_letter_admin_confirm_admin?.trim() || null,
+              saving: savingSection === "lunch_letter",
+              onToggle: (next) =>
+                verifyToggle("lunch_letter_admin_confirm", next, "lunch_letter"),
+              ...unverifyLockedConfig,
+            }}
+          >
+            <LunchLetterBlock
+              progress={progress}
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+              familyName={family?.family_name ?? "family"}
+              recipientEmail={primary?.email ?? ""}
+              recipientName={
+                primary
+                  ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
+                  : ""
+              }
+              onChanged={refresh}
+            />
+          </SectionShell>
+        </section>
         </div>
       </main>
     </div>
@@ -1055,6 +1105,7 @@ function RegistrationSideNav({
     registration: { completed: boolean; verified: boolean };
     emergency_contacts: { completed: boolean; verified: boolean };
     volunteer: { completed: boolean; verified: boolean };
+    lunch_letter: { completed: boolean; verified: boolean };
     confirmation: { completed: boolean; verified: boolean | null };
     testing: { completed: boolean; verified: boolean | null };
     billing: { completed: boolean; verified: boolean | null };
@@ -1151,6 +1202,13 @@ function RegistrationSideNav({
       href: "#section-volunteer",
       complete: sectionStatus.volunteer.completed,
       verified: sectionStatus.volunteer.verified,
+    },
+    {
+      key: "lunch_letter",
+      label: "Lunch Letter",
+      href: "#section-lunch-letter",
+      complete: sectionStatus.lunch_letter.completed,
+      verified: sectionStatus.lunch_letter.verified,
     },
   ];
 
@@ -3289,6 +3347,58 @@ function StudentPacketBlock({
               </div>
             ) : null}
           </SectionGroup>
+
+          <Separator />
+
+          {/* Parent's answer to "transferring from a Pinellas County
+              public school", and the withdrawal form it requires. */}
+          <SectionGroup title="Public School Withdrawal Form">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <DisabledField
+                label="Transferring from Pinellas public school"
+                value={packet?.transferring_from_pinellas_public ? "Yes" : "No"}
+              />
+              <DisabledField
+                label="Form status"
+                value={
+                  packet?.withdrawal_form_status &&
+                  packet.withdrawal_form_status !== "void"
+                    ? formatPdStatus(packet.withdrawal_form_status)
+                    : ""
+                }
+                placeholder={
+                  packet?.transferring_from_pinellas_public
+                    ? "Not started"
+                    : "Not required"
+                }
+              />
+              <DisabledField
+                label="Sent"
+                value={formatTimestamp(packet?.withdrawal_form_sent_at)}
+              />
+            </div>
+            {packet?.withdrawal_form_status === "completed" &&
+            packet?.withdrawal_form_pandadoc_id ? (
+              <div className="mt-3 flex justify-end">
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                >
+                  <a
+                    href={`/api/admin/pandadoc/download?documentId=${packet.withdrawal_form_pandadoc_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    download={`withdrawal-form-${row.student_full_name.replace(/\s+/g, "-")}.pdf`}
+                  >
+                    <FileText className="size-3.5 mr-1.5" />
+                    Download PDF
+                  </a>
+                </Button>
+              </div>
+            ) : null}
+          </SectionGroup>
         </>
       )}
       </div>
@@ -3642,6 +3752,82 @@ function VolunteerHoursBlock({
             required
           />
           <SignaturePreview label="Signature" signature={sig} />
+        </div>
+      </SectionGroup>
+    </div>
+  );
+}
+
+/* ─────────────────────── Lunch letter block ─────────────────────── */
+
+function LunchLetterBlock({
+  progress,
+  familyId,
+  yearId,
+  familyName,
+  recipientEmail,
+  recipientName,
+  onChanged,
+}: {
+  progress: AdminFamilyRegistrationResponse["progress"];
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  recipientEmail: string;
+  recipientName: string;
+  onChanged: () => void | Promise<unknown>;
+}) {
+  const pdId = progress?.lunch_letter_pandadoc_id ?? "";
+  const rawStatus = progress?.lunch_letter_status ?? "";
+  // "void" is the cleared-envelope sentinel, not a state to show.
+  const pdStatus = rawStatus === "void" ? "" : rawStatus;
+  const isSigned = progress?.isLunchLetter === true;
+  // Signed in PandaDoc, as opposed to marked complete by an admin
+  // verify (a paper copy): only the former has a PDF to download.
+  const hasSignedPdf = pdStatus === "completed" && !!pdId;
+
+  return (
+    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+      <SectionGroup title="PandaDoc">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <DisabledField
+            label="Status"
+            value={
+              isSigned ? "Signed" : pdStatus ? formatPdStatus(pdStatus) : ""
+            }
+            placeholder="Not sent"
+          />
+          <DisabledField
+            label="Sent"
+            value={formatTimestamp(progress?.lunch_letter_sent)}
+          />
+          <DisabledField label="Document ID" value={pdId} placeholder="—" />
+        </div>
+        <div className="mt-3 flex justify-end gap-2">
+          {hasSignedPdf ? (
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <a
+                href={`/api/admin/pandadoc/download?documentId=${pdId}`}
+                target="_blank"
+                rel="noreferrer"
+                download={`lunch-letter-${familyName.replace(/\s+/g, "-")}.pdf`}
+              >
+                <FileText className="size-3.5 mr-1.5" />
+                Download PDF
+              </a>
+            </Button>
+          ) : null}
+          {!isSigned ? (
+            <SendLunchLetterButton
+              familyId={familyId}
+              yearId={yearId}
+              familyName={familyName}
+              recipientEmail={recipientEmail}
+              recipientName={recipientName}
+              alreadySent={!!pdId && !!pdStatus}
+              onSent={onChanged}
+            />
+          ) : null}
         </div>
       </SectionGroup>
     </div>
@@ -5414,6 +5600,10 @@ function FamilyRegistrationConfirmationCard({
     {
       label: "Volunteer Hours",
       verified: progress?.volunteer_admin_confirm === true,
+    },
+    {
+      label: "Lunch Letter",
+      verified: progress?.lunch_letter_admin_confirm === true,
     },
     {
       label: "Emergency Contacts",

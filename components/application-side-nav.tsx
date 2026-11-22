@@ -16,12 +16,14 @@ const SHORT_LABELS: Record<string, string> = {
   "Review Tuition & Scholarship Award": "Tuition",
   "Sign Enrollment Agreement": "Enrollment",
   "Begin Registration Process": "Registration",
+  "Volunteer Hours Acknowledgment": "Volunteer Hours",
+  "Free & Reduced Lunch Letter": "Lunch Letter",
   "Submit Registration": "Submit",
   "Submit Application": "Submit",
 };
 
 /* Registration page segments */
-const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
+const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours", "lunch-letter"]);
 
 /* Segment → step number maps */
 const APPLICATION_SEGMENT_MAP: Record<string, number> = {
@@ -37,6 +39,7 @@ const REGISTRATION_SEGMENT_MAP: Record<string, number> = {
   "enrollment-signing": 2,
   registration: 3,
   "volunteer-hours": 4,
+  "lunch-letter": 5,
 };
 
 function StepCircle({ number, status }: { number: number; status: StepStatus }) {

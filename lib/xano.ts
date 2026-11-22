@@ -2178,6 +2178,21 @@ export interface XanoStudentRegistrationProgress {
   /** Printed name on the tuition acknowledgement. */
   name: string;
 
+  // --- Free and reduced lunch letter --------------------------------------
+  // Family-level (one per family per year), signed in PandaDoc on
+  // /lunch-letter. Written ONLY by the server (create / status / webhook
+  // routes) after PandaDoc confirms the state, never by a parent PATCH.
+  // All optional: rows created before the columns existed read undefined.
+  /** Section-complete latch: the lunch letter is signed. */
+  isLunchLetter?: boolean;
+  lunch_letter_pandadoc_id?: string;
+  /** PandaDoc status mirror: "draft" | "sent" | "viewed" | "completed",
+   *  or the "void" sentinel (Xano's PATCH can't clear a text column). */
+  lunch_letter_status?: string;
+  /** When the envelope went out (epoch ms). */
+  lunch_letter_sent?: number | null;
+  lunch_letter_pdf_url?: string;
+
   last_edited: number | null;
   /** Timestamp stamped when all three section bools are true. */
   submitted_date: number | null;
@@ -2209,6 +2224,9 @@ export interface XanoStudentRegistrationProgress {
   volunteer_admin_confirm?: boolean;
   volunteer_admin_confirm_time?: number | null;
   volunteer_admin_confirm_admin?: string;
+  lunch_letter_admin_confirm?: boolean;
+  lunch_letter_admin_confirm_time?: number | null;
+  lunch_letter_admin_confirm_admin?: string;
   /** Emergency-contacts section verify triplet. No matching parent-
    *  completion bool exists for this section (emergency contacts are
    *  family-evergreen — they exist or they don't, with no in-progress
@@ -2393,6 +2411,19 @@ export interface XanoStudentRegistration {
   liability_waiver_status: string;
   liability_waiver_sent_at: string | null;
   liability_waiver_pdf_url: string;
+  /** Parent ticked "my student is transferring from a Pinellas County
+   *  public school" on the registration packet. When true, the packet
+   *  also needs the signed withdrawal form below. */
+  transferring_from_pinellas_public?: boolean;
+  // Public school withdrawal form (PandaDoc), one per student per year.
+  // Written ONLY by the PandaDoc create / status / webhook routes; the
+  // parent packet PATCH strips these so a spread-the-packet save can't
+  // carry a stale "sent" back over "completed".
+  withdrawal_form_pandadoc_id?: string;
+  /** "draft" | "sent" | "viewed" | "completed", or the "void" sentinel. */
+  withdrawal_form_status?: string;
+  withdrawal_form_sent_at?: number | null;
+  withdrawal_form_pdf_url?: string;
   /** Mid-year sibling additions only (see `lib/midyear-additions.ts`).
    *  The family-level tuition signature + enrollment agreement live on
    *  the progress row and were signed before this student existed, so

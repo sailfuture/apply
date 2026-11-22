@@ -59,7 +59,20 @@ export async function PATCH(
     "addition_enrollment_agreement_pdf_url",
     "addition_registration_submitted_at",
   ];
-  for (const f of [...ADMIN_ONLY_FIELDS, ...ADDITION_FIELDS]) {
+  // Public school withdrawal form state: same hazard, same rule. The
+  // parent's own answer (`transferring_from_pinellas_public`) is theirs
+  // to write and is NOT in this list.
+  const WITHDRAWAL_FORM_FIELDS = [
+    "withdrawal_form_pandadoc_id",
+    "withdrawal_form_status",
+    "withdrawal_form_sent_at",
+    "withdrawal_form_pdf_url",
+  ];
+  for (const f of [
+    ...ADMIN_ONLY_FIELDS,
+    ...ADDITION_FIELDS,
+    ...WITHDRAWAL_FORM_FIELDS,
+  ]) {
     if (f in body) delete body[f];
   }
 

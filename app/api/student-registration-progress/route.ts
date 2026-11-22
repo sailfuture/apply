@@ -160,6 +160,9 @@ export async function PATCH(req: NextRequest) {
     next.isEnrollment === true &&
     next.isRegistration === true &&
     next.isVolunteerHours === true &&
+    // Lunch letter: latched by the PandaDoc status/webhook routes, never
+    // by this PATCH (it isn't in `allowed`), so `next` reads the row.
+    next.isLunchLetter === true &&
     (!row.submitted_date || row.submitted_date === null);
   if (justSubmitted) {
     patch.submitted_date = Date.now();

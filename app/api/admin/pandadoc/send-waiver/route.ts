@@ -8,6 +8,7 @@ import {
   getTemplateId,
   getTemplateRole,
   getWaiverCcRecipients,
+  schoolTodayIso,
   sendDocument,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
@@ -247,6 +248,8 @@ async function doSend(
       "student.first_name": student.first_name ?? "",
       "student.last_name": student.last_name ?? "",
       "student.full_name": studentName,
+      // The participation agreement's variable, spelled as in the template.
+      "Student Full Name": studentName,
       "parent.first_name": recipientFirstName,
       "parent.last_name": recipientLastName,
       "parent.email": recipientEmail,
@@ -257,6 +260,11 @@ async function doSend(
       parent_full_name: parentName,
       parent_name: parentName,
       parent_email: recipientEmail,
+      parent_relationship: primary?.relationship?.trim() ?? "",
+      // Prefilled with the day it was sent; the parent can change it
+      // when they sign on a later day.
+      today_date: schoolTodayIso(),
+      signature_date: schoolTodayIso(),
       "parent.first_name": recipientFirstName,
       "parent.last_name": recipientLastName,
       "parent.full_name": parentName,

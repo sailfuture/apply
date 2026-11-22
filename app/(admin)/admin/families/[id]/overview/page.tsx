@@ -833,6 +833,7 @@ export default function FamilyOverviewPage() {
                     rp.isEnrollment,
                     rp.isRegistration,
                     rp.isVolunteerHours,
+                    rp.isLunchLetter,
                   ];
                   const done = sections.filter(Boolean).length;
                   return (
@@ -847,7 +848,7 @@ export default function FamilyOverviewPage() {
                         </Link>
                       </TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">
-                        {done} / 4
+                        {done} / {sections.length}
                       </TableCell>
                       <TableCell>
                         {rp.isRegistrationConfirmed ? (

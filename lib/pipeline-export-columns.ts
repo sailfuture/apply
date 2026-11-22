@@ -44,6 +44,7 @@ export interface PipelineExportRow {
   enrollment_agreement_done: string;
   registration_packet_done: string;
   volunteer_hours_done: string;
+  lunch_letter_done: string;
   registration_submitted: string;
   registration_submitted_date: string;
   registration_confirmed: string;
@@ -113,6 +114,7 @@ export const PIPELINE_EXPORT_COLUMNS: PipelineExportColumn[] = [
   { key: "enrollment_agreement_done", label: "Enrollment Agreement Done", group: "Registration" },
   { key: "registration_packet_done", label: "Registration Packet Done", group: "Registration" },
   { key: "volunteer_hours_done", label: "Volunteer Hours Done", group: "Registration" },
+  { key: "lunch_letter_done", label: "Lunch Letter Done", group: "Registration" },
   { key: "registration_submitted", label: "Registration Submitted", group: "Registration", defaultSelected: true },
   { key: "registration_submitted_date", label: "Registration Submitted Date", group: "Registration", date: true },
   { key: "registration_confirmed", label: "Registration Confirmed", group: "Registration", defaultSelected: true },
@@ -218,6 +220,7 @@ export function buildPipelineExportRows(
     enrollment_agreement_done: yesNo(r.reg_enrollment_done),
     registration_packet_done: yesNo(r.reg_packet_done),
     volunteer_hours_done: yesNo(r.reg_volunteer_done),
+    lunch_letter_done: yesNo(r.reg_lunch_letter_done),
     registration_submitted: yesNo(r.reg_submitted),
     registration_submitted_date: formatTimestampUs(r.reg_submitted_date),
     registration_confirmed: yesNo(r.is_registration_confirmed),

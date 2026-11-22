@@ -294,6 +294,7 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
       { section: "enrollment", complete: !!regProgress?.isEnrollment },
       { section: "registration", complete: !!regProgress?.isRegistration },
       { section: "volunteer", complete: !!regProgress?.isVolunteerHours },
+      { section: "lunch_letter", complete: !!regProgress?.isLunchLetter },
     ],
     [regProgress]
   );
@@ -346,14 +347,13 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {/* Steps 1–4 are the four registration sections (Tuition,
-                    Enrollment, Registration, Volunteer Hours). Step 5 is
-                    "Submit Registration" — rendered separately below as
-                    the blue CTA row, so we exclude it here. Volunteer
-                    Hours used to be excluded by mistake, which left it
-                    without the amber/pencil edit affordance the other
-                    sections render. */}
-                {registrationSteps.filter((s) => s.number <= 4).map((step) => {
+                {/* Every registration section (Tuition, Enrollment,
+                    Registration, Volunteer Hours, Lunch Letter). The last
+                    step, "Submit Registration", is rendered separately
+                    below as the blue CTA row, so we exclude it here by
+                    title: a step-number cutoff silently hides whichever
+                    section is added next. */}
+                {registrationSteps.filter((s) => s.title !== "Submit Registration").map((step) => {
                   const isComplete = step.status === "complete";
                   return (
                     <tr

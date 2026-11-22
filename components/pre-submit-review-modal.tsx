@@ -33,7 +33,8 @@ export type ProgressSectionKey =
   | "tuition"
   | "enrollment"
   | "registration"
-  | "volunteer";
+  | "volunteer"
+  | "lunch_letter";
 
 export interface SectionStatus {
   section: ProgressSectionKey;
@@ -67,6 +68,7 @@ const SECTION_LABELS: Record<ProgressSectionKey, string> = {
   enrollment: "Enrollment Agreement",
   registration: "Registration Packet",
   volunteer: "Volunteer Hours",
+  lunch_letter: "Free & Reduced Lunch Letter",
 };
 
 const SECTION_HREFS: Record<ProgressSectionKey, string> = {
@@ -78,6 +80,7 @@ const SECTION_HREFS: Record<ProgressSectionKey, string> = {
   enrollment: "/enrollment-signing",
   registration: "/registration",
   volunteer: "/volunteer-hours",
+  lunch_letter: "/lunch-letter",
 };
 
 /**

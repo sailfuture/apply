@@ -8,6 +8,7 @@ import {
 } from "@/lib/xano";
 import {
   createDocumentFromTemplate,
+  deleteDocument,
   sendDocument,
   createSigningSession,
   getDocumentStatus,
@@ -15,8 +16,11 @@ import {
   getDocumentDownloadUrl,
   getTemplateId,
   getTemplateRole,
+  schoolTodayIso,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
+import { formatDateUs } from "@/lib/us-date";
+import { formatUSPhone } from "@/lib/phone";
 
 // The create chain does real PandaDoc work (create-from-template →
 // wait-for-draft → send → session). Give the function room so a slow
@@ -31,12 +35,21 @@ export const maxDuration = 60;
 type DocType =
   | "liability_waiver"
   | "enrollment_agreement"
-  | "addition_enrollment_agreement";
+  | "addition_enrollment_agreement"
+  | "lunch_letter"
+  | "withdrawal_form";
 const DOC_TYPES: DocType[] = [
   "liability_waiver",
   "enrollment_agreement",
   "addition_enrollment_agreement",
+  "lunch_letter",
+  "withdrawal_form",
 ];
+
+/** Documents signed once per family per year. They live on the family's
+ *  registration progress row; everything else lives on a student's packet. */
+const isFamilyDoc = (type: DocType) =>
+  type === "enrollment_agreement" || type === "lunch_letter";
 
 interface CreateResult {
   status: number;
@@ -167,7 +180,7 @@ async function doCreate(
   // together instead of the previous four-deep waterfall:
   //   - the target row this doc type lives on (packet for the waiver
   //     and a sibling's agreement, family progress row for the family
-  //     agreement) — resolved-or-created
+  //     agreement and the lunch letter) — resolved-or-created
   //   - the family (for the doc name + tokens)
   //   - the student (for the doc name + fields)
   let targetRow: Awaited<ReturnType<typeof packetForType>> | XanoStudentRegistrationProgress;
@@ -175,7 +188,7 @@ async function doCreate(
   let student: Awaited<ReturnType<typeof xano.students.getById>>;
   try {
     [targetRow, family, student] = await Promise.all([
-      type === "enrollment_agreement"
+      isFamilyDoc(type)
         ? xano.studentRegistrationProgress.resolve(
             familyId,
             application.registration_school_years_id
@@ -193,14 +206,12 @@ async function doCreate(
     }
     throw err;
   }
-  const packetRow =
-    type === "enrollment_agreement"
-      ? null
-      : (targetRow as XanoStudentRegistration);
-  const progressRow =
-    type === "enrollment_agreement"
-      ? (targetRow as XanoStudentRegistrationProgress)
-      : null;
+  const packetRow = isFamilyDoc(type)
+    ? null
+    : (targetRow as XanoStudentRegistration);
+  const progressRow = isFamilyDoc(type)
+    ? (targetRow as XanoStudentRegistrationProgress)
+    : null;
   const additionRow = type === "addition_enrollment_agreement" ? packetRow : null;
 
   const pandadocIdField =
@@ -208,7 +219,11 @@ async function doCreate(
       ? "liability_waiver_pandadoc_id"
       : type === "addition_enrollment_agreement"
         ? "addition_enrollment_agreement_pandadoc_id"
-        : "enrollment_agreement_pandadoc_id";
+        : type === "lunch_letter"
+          ? "lunch_letter_pandadoc_id"
+          : type === "withdrawal_form"
+            ? "withdrawal_form_pandadoc_id"
+            : "enrollment_agreement_pandadoc_id";
   const existingDocId = (targetRow as unknown as Record<string, unknown>)[
     pandadocIdField
   ] as string | null;
@@ -222,7 +237,11 @@ async function doCreate(
       ? `Liability Waiver – ${student.first_name} ${student.last_name}`
       : type === "addition_enrollment_agreement"
         ? `Enrollment Agreement – ${student.first_name} ${student.last_name}`
-        : `Enrollment Agreement – ${family.family_name}`;
+        : type === "lunch_letter"
+          ? `Free and Reduced Lunch Letter – ${family.family_name}`
+          : type === "withdrawal_form"
+            ? `Public School Withdrawal Form – ${student.first_name} ${student.last_name}`
+            : `Enrollment Agreement – ${family.family_name}`;
 
   // Sync a locally-known row to "completed" — used when PandaDoc says
   // the envelope is already signed but our row hasn't caught up. This
@@ -231,13 +250,28 @@ async function doCreate(
   // fell through to wipe + recreate, destroying the signature record.
   const syncCompleted = async (docId: string) => {
     const pdfUrl = getDocumentDownloadUrl(docId);
-    if (type === "enrollment_agreement" && progressRow) {
+    if (type === "lunch_letter" && progressRow) {
+      await xano.studentRegistrationProgress
+        .update(progressRow.id, {
+          lunch_letter_status: "completed",
+          lunch_letter_pdf_url: pdfUrl,
+          isLunchLetter: true,
+        })
+        .catch(() => {});
+    } else if (type === "enrollment_agreement" && progressRow) {
       await xano.studentRegistrationProgress
         .update(progressRow.id, {
           enrollment_agreement_status: "completed",
           enrollment_agreement_pdf_url: pdfUrl,
           is_enrollment_agreement_signed: true,
           isEnrollment: true,
+        })
+        .catch(() => {});
+    } else if (type === "withdrawal_form" && packetRow) {
+      await xano.studentRegistration
+        .update(packetRow.id, {
+          withdrawal_form_status: "completed",
+          withdrawal_form_pdf_url: pdfUrl,
         })
         .catch(() => {});
     } else if (type === "liability_waiver" && packetRow) {
@@ -261,7 +295,29 @@ async function doCreate(
   // row. ONLY called when the envelope is genuinely unusable (deleted,
   // voided, declined) — never for a completed doc.
   const wipeStaleMetadata = async () => {
-    if (type === "enrollment_agreement" && progressRow) {
+    if (type === "lunch_letter" && progressRow) {
+      // "void" sentinel, same reason as the sibling agreement below:
+      // Xano's PATCH drops empty strings. The fresh create overwrites
+      // the id.
+      await xano.studentRegistrationProgress
+        .update(progressRow.id, {
+          lunch_letter_status: "void",
+          // Keep a completion an admin recorded by verifying.
+          isLunchLetter: progressRow.lunch_letter_admin_confirm === true,
+        })
+        .catch(() => {});
+      // Retire the abandoned envelope (for example one admin emailed to
+      // a different parent): left live, a signature on it would be
+      // dropped by the id guard. 404 counts as success.
+      if (existingDocId) {
+        await deleteDocument(existingDocId).catch((err) =>
+          console.error(
+            `[pandadoc/create] couldn't retire lunch letter envelope ${existingDocId}:`,
+            err
+          )
+        );
+      }
+    } else if (type === "enrollment_agreement" && progressRow) {
       await xano.studentRegistrationProgress
         .update(progressRow.id, {
           enrollment_agreement_pandadoc_id: "",
@@ -271,6 +327,12 @@ async function doCreate(
           is_enrollment_agreement_signed: false,
           isEnrollment: false,
         })
+        .catch(() => {});
+    } else if (type === "withdrawal_form" && packetRow) {
+      // "void" sentinel (Xano's PATCH drops empty strings); the fresh
+      // create overwrites the id.
+      await xano.studentRegistration
+        .update(packetRow.id, { withdrawal_form_status: "void" })
         .catch(() => {});
     } else if (type === "liability_waiver" && packetRow) {
       await xano.studentRegistration
@@ -369,8 +431,82 @@ async function doCreate(
 
   // ── Fresh create ──────────────────────────────────────────────────
   const templateType =
-    type === "liability_waiver" ? "liability_waiver" : "enrollment_agreement";
+    type === "liability_waiver"
+      ? "liability_waiver"
+      : type === "lunch_letter"
+        ? "lunch_letter"
+        : type === "withdrawal_form"
+          ? "withdrawal_form"
+          : "enrollment_agreement";
   const templateId = getTemplateId(templateType);
+
+  // Extra prefills the withdrawal form asks for. Empty strings when the
+  // family hasn't given them; the signer fills those in on the form.
+  const studentDob = formatDateUs(student.date_of_birth);
+
+  // School year variables for the enrollment agreement: "School Year"
+  // is the year's name ("2026-2027"), "Start Year" / "End Year" its two
+  // halves ("2026" / "2027"). Taken from the year the APPLICATION is for,
+  // so a family signing next year's agreement gets next year's dates.
+  // The name is the source; the row's start/end dates only back it up
+  // when a name isn't in the usual "YYYY-YYYY" shape.
+  const schoolYear = await xano.schoolYears
+    .getById(application.registration_school_years_id)
+    .catch(() => null);
+  const schoolYearName = schoolYear?.year_name?.trim() ?? "";
+  const yearParts = /(\d{4})\D+(\d{4})/.exec(schoolYearName);
+  const startYear =
+    yearParts?.[1] ?? (schoolYear?.start_date ?? "").slice(0, 4);
+  const endYear = yearParts?.[2] ?? (schoolYear?.end_date ?? "").slice(0, 4);
+  if (type === "enrollment_agreement" || type === "addition_enrollment_agreement") {
+    // These print inside the contract's text. Sending the document with
+    // a blank where the year belongs is worse than not sending it.
+    if (!schoolYearName || !startYear || !endYear) {
+      throw new Error(
+        "Couldn't determine the school year for this enrollment agreement. Please contact the school."
+      );
+    }
+  }
+  // YYYY-MM-DD in the school's timezone ("en-CA" formats that way), so
+  // an evening signer doesn't get tomorrow's UTC date.
+  const todayIso = schoolTodayIso();
+  // The signer's phone and relationship, from their own parent row. Only
+  // the withdrawal form (phone) and the participation agreement / waiver
+  // (relationship) ask for them, so only those types pay for the lookup;
+  // a miss just leaves the field for the parent to type.
+  let parentPhone = "";
+  let parentRelationship = "";
+  if (type === "withdrawal_form" || type === "liability_waiver") {
+    const signer = await xano.parents.findByClerkId(user.id).catch(() => null);
+    parentPhone = formatUSPhone(signer?.phone);
+    parentRelationship = signer?.relationship?.trim() ?? "";
+  }
+
+  // The lunch letter is a household form, so it names every student the
+  // family has in this year rather than the one application the request
+  // came in on. Best-effort: a failed lookup falls back to that student.
+  let householdStudents = `${student.first_name} ${student.last_name}`;
+  if (type === "lunch_letter") {
+    try {
+      const [yearApps, familyStudents] = await Promise.all([
+        xano.applications.getByFamilyAndYear(
+          familyId,
+          application.registration_school_years_id
+        ),
+        xano.students.getByFamilyId(familyId),
+      ]);
+      const inYear = new Set(
+        yearApps.map((a) => Number(a.registration_students_id))
+      );
+      const names = familyStudents
+        .filter((s) => inYear.has(Number(s.id)))
+        .map((s) => `${s.first_name} ${s.last_name}`.trim())
+        .filter(Boolean);
+      if (names.length > 0) householdStudents = names.join(", ");
+    } catch (err) {
+      console.error("[pandadoc/create] household student lookup failed:", err);
+    }
+  }
   const doc = await createDocumentFromTemplate({
     templateId,
     name: expectedDocName,
@@ -391,9 +527,18 @@ async function doCreate(
       "student.first_name": student.first_name,
       "student.last_name": student.last_name,
       "student.full_name": `${student.first_name} ${student.last_name}`,
+      // The participation agreement's variable, spelled as in the template.
+      "Student Full Name": `${student.first_name} ${student.last_name}`,
       "parent.first_name": recipientFirstName,
       "parent.last_name": recipientLastName,
       "parent.email": recipientEmail,
+      "students.names": householdStudents,
+      // Names exactly as the variables are spelled in the template.
+      "School Year": schoolYearName,
+      "Start Year": startYear,
+      "End Year": endYear,
+      "student.date_of_birth": studentDob,
+      "parent.phone": parentPhone,
     },
     fields: {
       parent_first_name: recipientFirstName,
@@ -418,6 +563,31 @@ async function doCreate(
       "Participant Name": `${student.first_name} ${student.last_name}`,
       family_name: family.family_name,
       "family.name": family.family_name,
+      student_names: householdStudents,
+      "students.names": householdStudents,
+      // The withdrawal template's date of birth is a TEXT field, so the
+      // plain key carries MM/DD/YYYY. A PandaDoc DATE field needs the
+      // ISO form the student row stores: use the `_iso` key for one.
+      student_date_of_birth: studentDob,
+      "student.date_of_birth": studentDob,
+      student_date_of_birth_text: studentDob,
+      student_date_of_birth_iso: student.date_of_birth ?? "",
+      parent_phone: parentPhone,
+      // The Field ID the withdrawal template actually uses.
+      parent_phone_number: parentPhone,
+      parent_relationship: parentRelationship,
+      "parent.phone": parentPhone,
+      // Today's date (school time) for the date beside the signature.
+      // ISO for a PandaDoc DATE field, MM/DD/YYYY for a text field. The
+      // signer can change it, which matters when they open the document
+      // one day and sign on another.
+      // The enrollment agreement's "School Year" field beside the
+      // signature ("2026-2027"), same value as the variable in its text.
+      school_year: schoolYearName,
+      signature_date: todayIso,
+      // The participation agreement names its date fields `today_date`.
+      today_date: todayIso,
+      signature_date_text: formatDateUs(todayIso),
     },
   });
 
@@ -425,11 +595,29 @@ async function doCreate(
   // wait/send/session chain. If the function times out or a later step
   // throws, the id is already on the row — the next visit resumes this
   // envelope instead of orphaning it and creating another.
-  if (type === "enrollment_agreement" && progressRow) {
+  if (type === "lunch_letter" && progressRow) {
+    await xano.studentRegistrationProgress
+      .update(progressRow.id, {
+        lunch_letter_pandadoc_id: doc.id,
+        lunch_letter_status: "draft",
+      })
+      .catch((err) =>
+        console.error("[pandadoc/create] early id persist failed:", err)
+      );
+  } else if (type === "enrollment_agreement" && progressRow) {
     await xano.studentRegistrationProgress
       .update(progressRow.id, {
         enrollment_agreement_pandadoc_id: doc.id,
         enrollment_agreement_status: "draft",
+      })
+      .catch((err) =>
+        console.error("[pandadoc/create] early id persist failed:", err)
+      );
+  } else if (type === "withdrawal_form" && packetRow) {
+    await xano.studentRegistration
+      .update(packetRow.id, {
+        withdrawal_form_pandadoc_id: doc.id,
+        withdrawal_form_status: "draft",
       })
       .catch((err) =>
         console.error("[pandadoc/create] early id persist failed:", err)
@@ -460,10 +648,20 @@ async function doCreate(
   const sessionId = await createSigningSession(doc.id, recipientEmail);
 
   // Bump status → "sent" now that the envelope is actually out.
-  if (type === "enrollment_agreement" && progressRow) {
+  if (type === "lunch_letter" && progressRow) {
+    await xano.studentRegistrationProgress.update(progressRow.id, {
+      lunch_letter_status: "sent",
+      lunch_letter_sent: Date.now(),
+    });
+  } else if (type === "enrollment_agreement" && progressRow) {
     await xano.studentRegistrationProgress.update(progressRow.id, {
       enrollment_agreement_status: "sent",
       enrollment_agreement_sent: new Date().toISOString(),
+    });
+  } else if (type === "withdrawal_form" && packetRow) {
+    await xano.studentRegistration.update(packetRow.id, {
+      withdrawal_form_status: "sent",
+      withdrawal_form_sent_at: Date.now(),
     });
   } else if (type === "liability_waiver" && packetRow) {
     await xano.studentRegistration.update(packetRow.id, {

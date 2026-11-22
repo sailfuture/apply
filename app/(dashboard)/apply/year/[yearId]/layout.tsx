@@ -79,13 +79,14 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
       { section: "enrollment", complete: !!regProgress?.isEnrollment },
       { section: "registration", complete: !!regProgress?.isRegistration },
       { section: "volunteer", complete: !!regProgress?.isVolunteerHours },
+      { section: "lunch_letter", complete: !!regProgress?.isLunchLetter },
     ],
     [regProgress]
   );
 
   // Get registration step counts for the Complete Section button
   const { registrationSteps, steps } = useApplicationSteps(Number(yearId));
-  const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
+  const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours", "lunch-letter"]);
   const currentSegment = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0] || "";
   const isRegistrationPage = REGISTRATION_SEGMENTS.has(currentSegment);
 

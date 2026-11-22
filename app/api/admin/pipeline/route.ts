@@ -193,6 +193,7 @@ async function handleGET(req: NextRequest) {
             reg.isEnrollment,
             reg.isRegistration,
             reg.isVolunteerHours,
+            reg.isLunchLetter,
           ].filter(Boolean).length
         : 0;
 
@@ -219,11 +220,12 @@ async function handleGET(req: NextRequest) {
         submitted_at: p.submitted_at ?? null,
         accepted_at: p.accepted_at ?? null,
         reg_sections_complete: regSections,
-        reg_sections_total: 4,
+        reg_sections_total: 5,
         reg_tuition_done: !!reg?.isTuition,
         reg_enrollment_done: !!reg?.isEnrollment,
         reg_packet_done: !!reg?.isRegistration,
         reg_volunteer_done: !!reg?.isVolunteerHours,
+        reg_lunch_letter_done: !!reg?.isLunchLetter,
         reg_submitted: !!reg?.isSubmitted,
         reg_submitted_date: reg?.submitted_date ?? null,
         is_registration_confirmed: isConfirmed,
@@ -309,6 +311,8 @@ export interface PipelineFamilyRow {
   reg_packet_done: boolean;
   /** Volunteer-hours acknowledgment done (/volunteer-hours). */
   reg_volunteer_done: boolean;
+  /** Free and reduced lunch letter signed (/lunch-letter). */
+  reg_lunch_letter_done: boolean;
   reg_submitted: boolean;
   reg_submitted_date: number | null;
   is_registration_confirmed: boolean;

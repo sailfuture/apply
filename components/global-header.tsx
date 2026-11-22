@@ -8,7 +8,7 @@ import { useFamily, useSchoolYears, useStudents } from "@/hooks/use-api";
 import { familyNameWithStudents } from "@/lib/family-name";
 import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
 
-const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
+const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours", "lunch-letter"]);
 
 interface SchoolYear {
   id: number;

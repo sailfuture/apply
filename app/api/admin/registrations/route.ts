@@ -248,6 +248,7 @@ async function handleGET(req: NextRequest) {
             progress.isEnrollment,
             progress.isRegistration,
             progress.isVolunteerHours,
+            progress.isLunchLetter,
           ].filter(Boolean).length
         : 0;
       return {
@@ -279,8 +280,9 @@ async function handleGET(req: NextRequest) {
         isEnrollment: !!progress?.isEnrollment,
         isRegistration: !!progress?.isRegistration,
         isVolunteerHours: !!progress?.isVolunteerHours,
+        isLunchLetter: !!progress?.isLunchLetter,
         sections_complete: sectionsComplete,
-        sections_total: 4,
+        sections_total: 5,
         registration_submitted: !!progress?.isSubmitted,
         registration_submitted_date: progress?.submitted_date ?? null,
         // Family-level registration-confirmation latch. Drives the
@@ -362,6 +364,8 @@ export interface RegistrationStudentRow {
   isEnrollment: boolean;
   isRegistration: boolean;
   isVolunteerHours: boolean;
+  /** Free and reduced lunch letter signed. */
+  isLunchLetter: boolean;
   sections_complete: number;
   sections_total: number;
   registration_submitted: boolean;

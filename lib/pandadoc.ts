@@ -329,13 +329,22 @@ export function getDocumentDownloadUrl(documentId: string): string {
   return `${PANDADOC_API_BASE}/documents/${documentId}/download`;
 }
 
-export function getTemplateId(
-  type: "liability_waiver" | "enrollment_agreement"
-): string {
+/** The PandaDoc templates the app creates documents from. */
+export type PandaDocTemplateType =
+  | "liability_waiver"
+  | "enrollment_agreement"
+  | "lunch_letter"
+  | "withdrawal_form";
+
+export function getTemplateId(type: PandaDocTemplateType): string {
   const envVar =
     type === "liability_waiver"
       ? "PANDADOC_LIABILITY_TEMPLATE_ID"
-      : "PANDADOC_ENROLLMENT_TEMPLATE_ID";
+      : type === "lunch_letter"
+        ? "PANDADOC_LUNCH_LETTER_TEMPLATE_ID"
+        : type === "withdrawal_form"
+          ? "PANDADOC_WITHDRAWAL_TEMPLATE_ID"
+          : "PANDADOC_ENROLLMENT_TEMPLATE_ID";
   const id = process.env[envVar];
   if (!id) throw new Error(`${envVar} is not set`);
   if (id.startsWith("your_")) {
@@ -380,13 +389,25 @@ export function getWaiverCcRecipients(): Array<{ email: string }> {
     .map((email) => ({ email }));
 }
 
-export function getTemplateRole(
-  type: "liability_waiver" | "enrollment_agreement"
-): string {
+export function getTemplateRole(type: PandaDocTemplateType): string {
+  // `PANDADOC_LUNCH_LETTER_ROLE` follows the same rule as the other two.
   const envVar =
     type === "liability_waiver"
       ? "PANDADOC_LIABILITY_ROLE"
-      : "PANDADOC_ENROLLMENT_ROLE";
+      : type === "lunch_letter"
+        ? "PANDADOC_LUNCH_LETTER_ROLE"
+        : type === "withdrawal_form"
+          ? "PANDADOC_WITHDRAWAL_ROLE"
+          : "PANDADOC_ENROLLMENT_ROLE";
   const role = process.env[envVar]?.trim();
   return role && role.length > 0 ? role : "Client";
+}
+
+/** Today's date at the school (Eastern) as YYYY-MM-DD, the form a
+ *  PandaDoc date field takes. "en-CA" formats that way; pinning the zone
+ *  keeps an evening signer off tomorrow's UTC date. */
+export function schoolTodayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+  }).format(new Date());
 }

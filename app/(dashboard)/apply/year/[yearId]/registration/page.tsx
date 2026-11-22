@@ -211,7 +211,21 @@ interface StudentRegistration {
   liability_waiver_status: string;
   liability_waiver_sent_at: string | null;
   liability_waiver_pdf_url: string;
+  /** Parent ticked "transferring from a Pinellas County public school". */
+  transferring_from_pinellas_public?: boolean;
+  /** Withdrawal form state. Server-owned: the packet PATCH strips these,
+   *  so local edits here are display-only mirrors of what the PandaDoc
+   *  routes wrote. */
+  withdrawal_form_pandadoc_id?: string;
+  withdrawal_form_status?: string;
 }
+
+/** Which PandaDoc document the signing dialog is showing. */
+type PacketDocType = "liability_waiver" | "withdrawal_form";
+const PACKET_DOC_LABEL: Record<PacketDocType, string> = {
+  liability_waiver: "liability waiver",
+  withdrawal_form: "withdrawal form",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -446,6 +460,13 @@ function isRegistrationComplete(reg: StudentRegistration, student: Student | und
   if (!reg.prohibited_adults) return false;
   // Liability waiver
   if (reg.liability_waiver_status !== "completed") return false;
+  // Withdrawal form, only for a student leaving a Pinellas public school
+  if (
+    reg.transferring_from_pinellas_public &&
+    reg.withdrawal_form_status !== "completed"
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -826,7 +847,10 @@ export default function RegistrationPage() {
   // PandaDoc signing state for per-student liability waivers
   const [signingStudentId, setSigningStudentId] = useState<number | null>(null);
   const [signingLoading, setSigningLoading] = useState<number | null>(null);
-  const [signingSession, setSigningSession] = useState<{ sessionId: string; documentId: string; studentId: number; applicationId: number } | null>(null);
+  const [signingSession, setSigningSession] = useState<{ sessionId: string; documentId: string; studentId: number; applicationId: number; docType: PacketDocType } | null>(null);
+  // Which document is being prepared / signed: drives the dialog title
+  // and the blocking overlay's wording.
+  const [signingDocType, setSigningDocType] = useState<PacketDocType>("liability_waiver");
   // `docLoaded` gates the full-screen "Preparing your waiver..."
   // overlay — flips true when PandaDoc's embed fires `document.loaded`.
   // Without this, signingSession is set the moment the API returns
@@ -883,6 +907,7 @@ export default function RegistrationPage() {
 
     const reg = registrations[studentId];
     const regId = reg?.id;
+    setSigningDocType("liability_waiver");
 
     // If already has a PandaDoc ID, resume the session
     if (reg?.liability_waiver_pandadoc_id) {
@@ -903,7 +928,7 @@ export default function RegistrationPage() {
           return;
         }
         const { documentId, sessionId } = await res.json();
-        setSigningSession({ sessionId, documentId, studentId, applicationId: app.id });
+        setSigningSession({ sessionId, documentId, studentId, applicationId: app.id, docType: "liability_waiver" });
         setSigningStudentId(studentId);
         startWaiverPolling(documentId, studentId, regId);
       } catch {
@@ -950,7 +975,7 @@ export default function RegistrationPage() {
         updateRegistration(studentId, "liability_waiver_status", "sent");
       }
 
-      setSigningSession({ sessionId, documentId, studentId, applicationId: app.id });
+      setSigningSession({ sessionId, documentId, studentId, applicationId: app.id, docType: "liability_waiver" });
       setSigningStudentId(studentId);
       startWaiverPolling(documentId, studentId, regId);
     } catch {
@@ -1017,6 +1042,106 @@ export default function RegistrationPage() {
     pollingRef.current = setTimeout(poll, delay);
   }
 
+  // ---------------------------------------------------------------------------
+  // PandaDoc signing for the per-student public school withdrawal form
+  // ---------------------------------------------------------------------------
+  // Unlike the waiver above, this never PATCHes its own status: the
+  // packet route strips `withdrawal_form_*`, and only the PandaDoc
+  // create / status / webhook routes write them, after PandaDoc itself
+  // reports the state. The page asks for that check and mirrors the
+  // answer into local state.
+
+  async function handleSignWithdrawal(studentId: number) {
+    const app = yearApps.find((a) => a.registration_students_id === studentId);
+    if (!app) return;
+
+    setSigningDocType("withdrawal_form");
+    setSigningLoading(studentId);
+    try {
+      const res = await fetch("/api/pandadoc/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "withdrawal_form",
+          applicationId: app.id,
+          yearId: app.registration_school_years_id,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast.error(body?.error ?? "Failed to prepare the withdrawal form.");
+        return;
+      }
+      const data = await res.json();
+      updateRegistration(studentId, "withdrawal_form_pandadoc_id", data.documentId);
+      // Already signed on PandaDoc (tab closed before the page heard
+      // back): the create route synced the packet, nothing to open.
+      if (data.completed) {
+        updateRegistration(studentId, "withdrawal_form_status", "completed");
+        toast.success("Withdrawal form already signed.");
+        return;
+      }
+      updateRegistration(studentId, "withdrawal_form_status", "sent");
+      setSigningSession({
+        sessionId: data.sessionId,
+        documentId: data.documentId,
+        studentId,
+        applicationId: app.id,
+        docType: "withdrawal_form",
+      });
+      setSigningStudentId(studentId);
+      startWithdrawalPolling(data.documentId, studentId);
+    } catch {
+      toast.error("Failed to open the withdrawal form.");
+    } finally {
+      setSigningLoading(null);
+    }
+  }
+
+  /** `fast` is used right after the embed reports completion: PandaDoc's
+   *  API can trail its own widget by a second or two. */
+  function startWithdrawalPolling(documentId: string, studentId: number, fast = false) {
+    if (pollingRef.current) clearTimeout(pollingRef.current);
+    const app = yearApps.find((a) => a.registration_students_id === studentId);
+    if (!app) return;
+    let delay = fast ? 1000 : 3000;
+    const maxDelay = fast ? 5000 : 30000;
+
+    async function poll() {
+      try {
+        const res = await fetch(
+          `/api/pandadoc/status?documentId=${documentId}&applicationId=${app!.id}&type=withdrawal_form&yearId=${app!.registration_school_years_id}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "missing") {
+            pollingRef.current = null;
+            setSigningSession(null);
+            setSigningStudentId(null);
+            toast.error(
+              "This document is no longer available. Please try again to start fresh."
+            );
+            return;
+          }
+          if (data.status === "completed") {
+            pollingRef.current = null;
+            updateRegistration(studentId, "withdrawal_form_status", "completed");
+            setSigningSession(null);
+            setSigningStudentId(null);
+            toast.success("Withdrawal form signed successfully.");
+            return;
+          }
+        }
+      } catch {
+        // Transient: fall through to the next tick.
+      }
+      delay = Math.min(delay * 1.3, maxDelay);
+      pollingRef.current = setTimeout(poll, delay);
+    }
+
+    pollingRef.current = setTimeout(poll, fast ? 0 : delay);
+  }
+
   // PandaDoc embed initialization — wait for Dialog to mount the wrapper div
   useEffect(() => {
     if (!signingSession) return;
@@ -1057,6 +1182,16 @@ export default function RegistrationPage() {
         .on("document.completed", async () => {
           // Update student registration status
           const currentSession = signingSession;
+          if (currentSession?.docType === "withdrawal_form") {
+            // The server confirms with PandaDoc and writes the status;
+            // the poll closes the dialog once that has happened.
+            startWithdrawalPolling(
+              currentSession.documentId,
+              currentSession.studentId,
+              true
+            );
+            return;
+          }
           if (currentSession) {
             const reg = registrations[currentSession.studentId];
             if (reg?.id) {
@@ -2650,6 +2785,107 @@ export default function RegistrationPage() {
 
                             <Separator />
 
+                            {/* Public school transfer + withdrawal form */}
+                            <section>
+                              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                                Public School Transfer
+                              </h3>
+                              <label className="inline-flex cursor-pointer items-center gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={reg.transferring_from_pinellas_public || false}
+                                  onChange={(e) => updateRegistration(student.id, "transferring_from_pinellas_public", e.target.checked)}
+                                  className="size-5 cursor-pointer rounded accent-primary"
+                                />
+                                <span className="text-sm select-none">Yes, my student is transferring from a Pinellas County public school</span>
+                              </label>
+                              <AnimatePresence initial={false}>
+                                {reg.transferring_from_pinellas_public && (
+                                  <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: "auto" }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="overflow-hidden"
+                                  >
+                                    <div
+                                      className={`mt-3 rounded-md border bg-white p-4 ${
+                                        showValidation && reg.withdrawal_form_status !== "completed"
+                                          ? "border-2 border-red-400"
+                                          : "border-input"
+                                      }`}
+                                    >
+                                      {(() => {
+                                        const formStatus = reg.withdrawal_form_status;
+                                        const docId = reg.withdrawal_form_pandadoc_id;
+                                        const formStarted = !!docId && formStatus !== "void";
+                                        const isLoading = signingLoading === student.id;
+
+                                        if (formStatus === "completed") {
+                                          const app = yearApps.find(
+                                            (a) => a.registration_students_id === student.id
+                                          );
+                                          const downloadUrl =
+                                            docId && app
+                                              ? `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`
+                                              : null;
+                                          return (
+                                            <div className="flex items-center justify-between gap-3">
+                                              <div className="flex items-center gap-3">
+                                                <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+                                                <div>
+                                                  <p className="text-sm font-medium">Withdrawal form signed</p>
+                                                  <p className="text-xs text-muted-foreground">This document has been signed and completed.</p>
+                                                </div>
+                                              </div>
+                                              {downloadUrl && (
+                                                <Button
+                                                  variant="outline"
+                                                  size="sm"
+                                                  className="shrink-0 bg-white"
+                                                  onClick={() => window.open(downloadUrl, "_blank")}
+                                                >
+                                                  Download PDF
+                                                </Button>
+                                              )}
+                                            </div>
+                                          );
+                                        }
+
+                                        return (
+                                          <div className="flex items-center justify-between gap-3">
+                                            <div className="flex items-center gap-3">
+                                              {formStarted && <Clock className="size-5 text-amber-500 shrink-0" />}
+                                              <div>
+                                                <p className="text-sm font-medium">
+                                                  {formStarted ? "Awaiting signature" : <>Withdrawal form required <span className="text-red-400">*</span></>}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">
+                                                  {formStarted
+                                                    ? "The withdrawal form has been prepared and is awaiting your signature."
+                                                    : "Students entering the K-12 scholarship program from a Pinellas County public school need a signed withdrawal form."}
+                                                </p>
+                                              </div>
+                                            </div>
+                                            <Button
+                                              size="sm"
+                                              className="shrink-0"
+                                              disabled={isLoading}
+                                              onClick={() => handleSignWithdrawal(student.id)}
+                                            >
+                                              {isLoading ? <><Loader2 className="size-3 animate-spin mr-1.5" /> Preparing...</> : formStarted ? "Sign Now" : "Complete Form"}
+                                            </Button>
+                                          </div>
+                                        );
+                                      })()}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </section>
+
+                            <Separator />
+
                             {/* Liability Waiver */}
                             <section>
                               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -2933,14 +3169,18 @@ export default function RegistrationPage() {
         <DialogContent className="max-w-[95vw] sm:max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 py-4 border-b shrink-0">
             <DialogTitle>
-              Sign Liability Waiver
+              {signingSession?.docType === "withdrawal_form"
+                ? "Complete Withdrawal Form"
+                : "Sign Liability Waiver"}
               {signingSession && (() => {
                 const s = enrolledStudents.find((st) => st.id === signingSession.studentId);
                 return s ? ` — ${s.first_name} ${s.last_name}` : "";
               })()}
             </DialogTitle>
             <DialogDescription>
-              Review and sign the liability waiver below.
+              {signingSession?.docType === "withdrawal_form"
+                ? "Fill out and sign the public school withdrawal form below."
+                : "Review and sign the liability waiver below."}
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 relative overflow-hidden">
@@ -2980,13 +3220,13 @@ export default function RegistrationPage() {
             className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm"
             role="status"
             aria-live="polite"
-            aria-label="Preparing liability waiver"
+            aria-label={`Preparing ${PACKET_DOC_LABEL[signingDocType]}`}
           >
             <div className="flex flex-col items-center gap-4 px-6 text-center">
               <Loader2 className="size-10 animate-spin text-primary" />
               <div className="space-y-1">
                 <p className="text-base font-medium">
-                  Preparing your liability waiver…
+                  Preparing your {PACKET_DOC_LABEL[signingDocType]}…
                 </p>
                 <p className="text-sm text-muted-foreground max-w-sm">
                   This usually takes a few seconds. Please don&apos;t close

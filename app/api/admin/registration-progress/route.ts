@@ -92,6 +92,15 @@ const SECTION_VERIFY_PAIRS: Array<{
     completedKey: "isVolunteerHours",
   },
   {
+    // Free and reduced lunch letter. Verifying cascades to
+    // `isLunchLetter=true`, which is how admin accepts a letter that
+    // came in outside PandaDoc (a paper copy handed to the office).
+    confirmKey: "lunch_letter_admin_confirm",
+    timeKey: "lunch_letter_admin_confirm_time",
+    adminKey: "lunch_letter_admin_confirm_admin",
+    completedKey: "isLunchLetter",
+  },
+  {
     // Emergency contacts — no parent-completion bool to cascade
     // into. Audit pair (time + admin name) still gets stamped, but
     // we leave the family's other state untouched.
@@ -211,6 +220,7 @@ export async function PATCH(req: NextRequest) {
       "tuition_admin_confirm",
       "enrollment_admin_confirm",
       "volunteer_admin_confirm",
+      "lunch_letter_admin_confirm",
       "emergency_contacts_admin_confirm",
       // Registration Packet — family-level section verify. Audit
       // pair (`is_registration_admin_confirm_time` / `_admin`) is

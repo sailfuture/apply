@@ -79,6 +79,10 @@ export async function GET(req: NextRequest) {
     if (progressRow?.enrollment_agreement_pandadoc_id === documentId) {
       owns = true;
       signed = progressRow.enrollment_agreement_status === "completed";
+    } else if (progressRow?.lunch_letter_pandadoc_id === documentId) {
+      // Free and reduced lunch letter, on the same family-level row.
+      owns = true;
+      signed = progressRow.lunch_letter_status === "completed";
     }
   }
 
@@ -97,6 +101,10 @@ export async function GET(req: NextRequest) {
         // A mid-year sibling's own enrollment agreement.
         owns = true;
         signed = packet.addition_enrollment_agreement_status === "completed";
+      } else if (packet?.withdrawal_form_pandadoc_id === documentId) {
+        // Public school withdrawal form.
+        owns = true;
+        signed = packet.withdrawal_form_status === "completed";
       }
     } catch {
       // Ignore — leaves `owns = false` and we fall through to 404.

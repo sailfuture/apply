@@ -69,6 +69,7 @@ interface RegStudentRow {
   isEnrollment: boolean;
   isRegistration: boolean;
   isVolunteerHours: boolean;
+  isLunchLetter: boolean;
   sections_complete: number;
   sections_total: number;
   registration_submitted: boolean;
@@ -141,6 +142,7 @@ interface RegFamilyRow {
   isEnrollment: boolean;
   isRegistration: boolean;
   isVolunteerHours: boolean;
+  isLunchLetter: boolean;
   sections_complete: number;
   sections_total: number;
   registration_submitted: boolean;
@@ -254,6 +256,7 @@ function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
       isEnrollment: r.isEnrollment,
       isRegistration: r.isRegistration,
       isVolunteerHours: r.isVolunteerHours,
+      isLunchLetter: r.isLunchLetter,
       sections_complete: r.sections_complete,
       sections_total: r.sections_total,
       registration_submitted: r.registration_submitted,
@@ -865,6 +868,11 @@ function SectionDots({ row }: { row: RegFamilyRow }) {
       key: "volunteer",
       complete: row.isVolunteerHours,
       label: "Volunteer Hours",
+    },
+    {
+      key: "lunch_letter",
+      complete: row.isLunchLetter,
+      label: "Lunch Letter",
     },
   ];
   return (

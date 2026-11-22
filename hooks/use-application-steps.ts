@@ -77,6 +77,10 @@ export function useApplicationSteps(yearId: number) {
     isEnrollment?: boolean;
     isRegistration?: boolean;
     isVolunteerHours?: boolean;
+    /** Free and reduced lunch letter signed (PandaDoc). */
+    isLunchLetter?: boolean;
+    /** Set once the lunch letter envelope exists: the "started" signal. */
+    lunch_letter_pandadoc_id?: string | null;
     submitted_date?: number | null;
     /** Whether the enrollment-agreement PandaDoc has been dispatched yet.
      *  Used as a "started" signal so the sidenav can show in-progress. */
@@ -276,6 +280,7 @@ export function useApplicationSteps(yearId: number) {
   // circle). The family can land on this step at any time without
   // any preceding gate clearing.
   const volunteerStarted = true;
+  const lunchLetterSigned = regProgressData?.isLunchLetter === true;
 
   // Billing is no longer a parent-facing step — admin creates the
   // Stripe `send_invoice` subscription on Confirm Registration, and
@@ -285,7 +290,8 @@ export function useApplicationSteps(yearId: number) {
     tuitionReviewed &&
     postEnrollmentSigned &&
     registrationComplete &&
-    volunteerAcknowledged;
+    volunteerAcknowledged &&
+    lunchLetterSigned;
 
   const registrationSteps: StepDef[] = useMemo(
     () => [
@@ -323,6 +329,14 @@ export function useApplicationSteps(yearId: number) {
       },
       {
         number: 5,
+        title: "Free & Reduced Lunch Letter",
+        description: "Complete and sign your household\u2019s free and reduced lunch letter.",
+        status: getStatus(lunchLetterSigned, true),
+        detail: lunchLetterSigned ? "Signed" : "In progress",
+        href: `${base}/lunch-letter`,
+      },
+      {
+        number: 6,
         title: "Submit Registration",
         description: "Review and submit your completed registration.",
         status: allRegistrationSectionsComplete ? "in_progress" as StepStatus : "not_started" as StepStatus,
@@ -337,6 +351,7 @@ export function useApplicationSteps(yearId: number) {
       registrationComplete,
       volunteerAcknowledged,
       volunteerStarted,
+      lunchLetterSigned,
       allRegistrationSectionsComplete,
     ]
   );
