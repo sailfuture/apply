@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
+import { describePlanChanges } from "@/lib/payment-plan";
 import {
   Activity,
   ChevronRight,
@@ -529,6 +530,8 @@ function NotStartedTable({
       // row visibly moves instead of flashing back as "not started".
       await onStarted();
       toast.success(`Monthly billing started for ${row.family_name}.`);
+      const planNote = describePlanChanges(body?.planChanges);
+      if (planNote) toast.info(planNote, { duration: 15000 });
       setConfirmRow(null);
     } catch (err) {
       console.error("[NotStartedTable.startBilling]", err);

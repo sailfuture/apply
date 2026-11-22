@@ -364,6 +364,7 @@ async function handleGET(
           annual_fee: app.annual_fee ?? null,
           tuition_sub_total: app.tuition_sub_total ?? null,
           monthly_amount: app.monthly_amount ?? null,
+          payment_count: app.payment_count ?? null,
           remaining_opportunity_amount:
             app.remaining_opportunity_amount ?? null,
           // Per-student scholarship-confirmation latch. Flipped by
@@ -618,6 +619,9 @@ export interface AdminFamilyRegistrationStudentRow {
   annual_fee: number | null;
   tuition_sub_total: number | null;
   monthly_amount: number | null;
+  /** Monthly payments `tuition_sub_total` is spread over (1–12); null
+   *  on a row saved before payment plans existed (those run 12). */
+  payment_count: number | null;
   remaining_opportunity_amount: number | null;
   /** True when admin has clicked Confirm Scholarship Award Amount
    *  on the Determination card for this student. Used by the

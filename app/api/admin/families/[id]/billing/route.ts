@@ -137,7 +137,14 @@ export async function POST(
           getBillingSnapshot(result.subscription.id),
           readAutopay(familyId, yearId),
         ]);
-        return NextResponse.json({ ...snapshot, autopay });
+        // `planChanges`: students whose monthly amount moved because
+        // their payment plan was set as billing started. The card
+        // says so, since the button showed the amount on file.
+        return NextResponse.json({
+          ...snapshot,
+          autopay,
+          planChanges: result.planChanges,
+        });
       } catch (err) {
         if (err instanceof BillingPreconditionError) {
           return NextResponse.json({ error: err.message }, { status: 409 });

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { toast } from "sonner";
+import { describePlanChanges } from "@/lib/payment-plan";
 import {
   AlertCircle,
   Calendar,
@@ -85,6 +86,11 @@ interface BillingSnapshot {
     customer: string | { id: string };
     pause_collection: unknown | null;
     cancel_at_period_end: boolean;
+    /** Set while the first invoice is held for a future date (the
+     *  year's billing start, or a payment plan's first month). Unix
+     *  seconds. */
+    trial_end?: number | null;
+    billing_cycle_anchor?: number;
     /** Only present on pre-Basil API payloads — Stripe's 2025-03-31
      *  release moved the billing period onto each SubscriptionItem.
      *  Our pinned dahlia version returns it item-level only. */
@@ -192,6 +198,9 @@ export function BillingCard({
   );
 
   const [pending, setPending] = useState<BillingAction | null>(null);
+  // The clock when the card mounted: whether the billing year has
+  // opened only needs to be right to the day.
+  const [mountedAtMs] = useState(() => Date.now());
   const [openingPortal, setOpeningPortal] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmAutopay, setConfirmAutopay] = useState<"on" | "off" | null>(
@@ -226,6 +235,10 @@ export function BillingCard({
       } else {
         toast.success(message);
       }
+      // Billing started on a different monthly amount than the button
+      // showed: the payment plan was set for the months left.
+      const planNote = describePlanChanges(body?.planChanges);
+      if (planNote) toast.info(planNote, { duration: 15000 });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -309,6 +322,11 @@ export function BillingCard({
     const billingStartLabel = billingStartDate
       ? formatStartDate(billingStartDate)
       : null;
+    // Once the billing year is open, a family's first payment is the
+    // month they start, not the year's start date.
+    const billingYearOpen =
+      !!billingStartDate &&
+      Date.parse(`${billingStartDate}T00:00:00Z`) <= mountedAtMs;
     // Start button is gated on TWO preconditions and we surface
     // whichever is blocking first below the action row:
     //   1. Registration must be admin-confirmed for the year
@@ -339,7 +357,17 @@ export function BillingCard({
               Confirmation card below, then click Start Monthly
               Billing to create the subscription in Stripe.
             </p>
-            {billingStartLabel ? (
+            {billingYearOpen ? (
+              <p className="text-xs text-muted-foreground">
+                The billing year is under way, so the first invoice
+                goes out{" "}
+                <span className="font-medium text-foreground">
+                  when billing starts
+                </span>{" "}
+                (or on the 1st of a later first payment month, if one
+                is set on the Scholarship Determination card).
+              </p>
+            ) : billingStartLabel ? (
               <p className="text-xs text-muted-foreground">
                 Invoicing starts:{" "}
                 <span className="font-medium text-foreground">
@@ -747,8 +775,29 @@ function actionSuccessMessage(
   body: BillingSnapshot | null
 ): string {
   switch (action) {
-    case "start":
-      return "Monthly billing started. Stripe will email the first invoice on the billing start date.";
+    case "start": {
+      // The first invoice is held when the billing year hasn't opened
+      // or the payment plan starts in a later month; otherwise the
+      // month the family enrolls is their first payment and Stripe
+      // prepares the invoice straight away.
+      const sub = body?.subscription;
+      const nowUnix = Date.now() / 1000;
+      const heldUntil =
+        sub?.status === "trialing" && sub.trial_end
+          ? sub.trial_end
+          : sub?.billing_cycle_anchor && sub.billing_cycle_anchor > nowUnix
+            ? sub.billing_cycle_anchor
+            : null;
+      return heldUntil
+        ? `Monthly billing started. Stripe will email the first invoice on ${new Date(
+            heldUntil * 1000
+          ).toLocaleDateString("en-US", {
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+          })}.`
+        : "Monthly billing started. Stripe is preparing the first invoice now.";
+    }
     case "cancel":
       return "Subscription will cancel at the end of the current billing period.";
     case "uncancel":

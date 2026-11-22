@@ -12,6 +12,7 @@ import {
   indexTransactionsByMonth,
   stripeStatusToUi,
 } from "@/lib/billing-schedule";
+import { planYearTotalCents, scheduledCentsForSlot } from "@/lib/payment-plan";
 
 /**
  * Parent-side billing schedule. Same shape as the admin schedule
@@ -99,7 +100,12 @@ export async function GET(req: NextRequest) {
           upcoming && latest
             ? addMonthsUtc(latest.dueMs, slot.slotIndex - latest.slotIndex)
             : null,
-        scheduledAmountCents: upcoming ? monthlyAmountCents : null,
+        // Each student's monthly counts from the month their own
+        // payment plan starts, so a month before a mid-year start
+        // shows nothing even while it is still "to come".
+        scheduledAmountCents: upcoming
+          ? scheduledCentsForSlot(activeApps, slot.slotIndex)
+          : null,
       };
     }
     const status = stripeStatusToUi(tx.status);
@@ -121,8 +127,10 @@ export async function GET(req: NextRequest) {
     };
   });
 
+  // Each student's monthly times their own number of payments (12 on
+  // a full-year plan, fewer for a mid-year start), not `monthly × 12`.
   const yearTotalCents =
-    monthlyAmountCents != null ? monthlyAmountCents * 12 : null;
+    monthlyAmountCents != null ? planYearTotalCents(activeApps) : null;
   const paidCents = transactions.reduce(
     (acc, t) => acc + (t.amount_paid_cents ?? 0),
     0

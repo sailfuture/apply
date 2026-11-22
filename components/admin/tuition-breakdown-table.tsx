@@ -11,6 +11,7 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
+import { planSummaryLabel } from "@/lib/payment-plan";
 import type {
   AdminFamilyRegistrationResponse,
   AdminFamilyRegistrationStudentRow,
@@ -385,7 +386,12 @@ export function TuitionBreakdownTable({
           </tr>
           <tr className="border-t bg-white">
             <td className="px-4 py-3 font-bold">
-              Monthly Payment (Aug – Jul, 12 months)
+              Monthly Payment (
+              {planSummaryLabel(
+                schoolYear.billing_start_date,
+                students.map((s) => s.payment_count)
+              )}
+              )
             </td>
             <td className="px-4 py-3 text-right font-bold">
               ${formatTuitionCurrency(monthlyTotal)}/mo

@@ -83,6 +83,16 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
+import {
+  FULL_YEAR_PAYMENTS,
+  availablePlanOptions,
+  paymentCountLabel,
+  planFirstMonthLabel,
+  planRangeLabel,
+  planSummaryLabel,
+  resolvedPaymentCount,
+  storedPaymentCount,
+} from "@/lib/payment-plan";
 import type { PerStudentBillingPreview } from "@/app/api/admin/student-registration/by-student/route";
 import {
   MidYearAdditionPanel,
@@ -5277,6 +5287,12 @@ function TuitionBreakdownTable({
   // Σ of the per-student monthlies — one Stripe SubscriptionItem
   // each, so this is the figure the family is actually invoiced.
   const monthlyTotal = sumStudentMonthly(lineItems);
+  // Which months that monthly figure runs: a family starting partway
+  // through the year pays the same yearly total over fewer payments.
+  const planLabel = planSummaryLabel(
+    schoolYear.billing_start_date,
+    rows.map(({ app }) => app.payment_count)
+  );
 
   return (
     <div className="rounded-lg border bg-white overflow-hidden">
@@ -5458,7 +5474,7 @@ function TuitionBreakdownTable({
           </tr>
           <tr className="border-t bg-white">
             <td className="px-4 py-3 font-bold">
-              Monthly Payment (Aug – Jul, 12 months)
+              Monthly Payment ({planLabel})
             </td>
             <td className="px-4 py-3 text-right font-bold tabular-nums">
               ${formatCurrency2(monthlyTotal)}/mo
@@ -6317,7 +6333,22 @@ function ScholarshipReviewBlock({
     const familyOwedSnap = snapConfirmed
       ? annualFeeTotal
       : tuitionTotal + transportTotal + annualFeeTotal - sufsTotal;
-    const monthlySnap = familyOwedSnap / 12;
+    // Spread over the students' payment plan: 12 for a full year,
+    // fewer for a family starting partway through it (the yearly
+    // amount itself never changes for a late start). When the
+    // students' plans differ there is no single divisor, so this
+    // family-level estimate falls back to 12 and its label says the
+    // months vary.
+    const snapPlanCounts = Array.from(
+      new Set(snapStudents.map((a) => resolvedPaymentCount(a.payment_count)))
+    );
+    const monthlySnap =
+      familyOwedSnap /
+      (snapPlanCounts.length === 1 ? snapPlanCounts[0] : FULL_YEAR_PAYMENTS);
+    const snapPlanLabel = planSummaryLabel(
+      schoolYear?.billing_start_date,
+      snapStudents.map((a) => a.payment_count)
+    );
     return (
       <div className="rounded-md border bg-white p-4 space-y-4">
         <div>
@@ -6428,13 +6459,14 @@ function ScholarshipReviewBlock({
                 <td className="px-4 py-2 font-semibold">
                   Monthly payment
                   <span className="ml-1.5 text-[11px] text-muted-foreground font-normal">
-                    · 12 months
+                    · {snapPlanLabel}
                   </span>
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums font-semibold">
                   {/* Cents, not whole dollars — this is the figure
-                      Stripe bills ((owed) / 12), so it must match the
-                      Acceptance receipt and the subscription exactly. */}
+                      Stripe bills (owed over the plan's payments), so
+                      it must match the Acceptance receipt and the
+                      subscription exactly. */}
                   ${formatCurrency2(monthlySnap)}/mo
                 </td>
               </tr>
@@ -6623,6 +6655,19 @@ function DecisionStudentRow({
   // is no other way to re-send an unchanged amount to Stripe.
   const [overrideStripeFailed, setOverrideStripeFailed] = useState(false);
 
+  // ─── Payment plan ─── The yearly amount is never prorated for a
+  // late start: it is spread over the payments from the first payment
+  // month through the end of the billing year (`lib/payment-plan.ts`).
+  // The picker offers this month and every later one; a month that
+  // has passed can't be a first payment.
+  const billingStartDate = schoolYear?.billing_start_date ?? null;
+  const [planNowMs] = useState(() => Date.now());
+  const planOptions = availablePlanOptions(billingStartDate, planNowMs);
+  const savedPlanCount = storedPaymentCount(app?.payment_count);
+  // The plan picked while overriding. Staged like the dollar inputs,
+  // and saved from the same review dialog.
+  const [stagedPlanCount, setStagedPlanCount] = useState<number | null>(null);
+
   // The "Remaining Amount Family Pays" input reads from the
   // `remaining_opportunity_amount` column on the app row. There's
   // intentionally no auto-fill (used to suggest `tuition − SUFS`
@@ -6718,6 +6763,8 @@ function DecisionStudentRow({
     body: {
       sufsAwardAmount?: number;
       remainingOpportunityAmount?: number;
+      /** Monthly payments the yearly amount is spread over. */
+      paymentCount?: number;
     }
   ) {
     if (!app) return;
@@ -6783,7 +6830,33 @@ function DecisionStudentRow({
     stagedRemaining !== (app?.remaining_opportunity_amount ?? null);
   const sufsStaged =
     stagedSufs != null && stagedSufs !== (app?.sufs_amount ?? null);
-  const hasStagedChange = overriding && (remainingStaged || sufsStaged);
+  const planStaged =
+    overriding && stagedPlanCount != null && stagedPlanCount !== savedPlanCount;
+  const hasStagedChange =
+    overriding && (remainingStaged || sufsStaged || planStaged);
+  // What the plan picker shows: the staged plan while overriding,
+  // otherwise the one on file (none on a row saved before plans
+  // existed).
+  const shownPlanCount = overriding
+    ? (stagedPlanCount ?? savedPlanCount)
+    : savedPlanCount;
+  // A plan on file whose first month has passed (billing is under
+  // way, or it moves to the months left when billing starts) still
+  // has to render as the picker's value.
+  const planPickerOptions =
+    shownPlanCount != null &&
+    !planOptions.some((o) => o.count === shownPlanCount)
+      ? [
+          {
+            count: shownPlanCount,
+            firstMonthLabel:
+              planFirstMonthLabel(billingStartDate, shownPlanCount) ??
+              paymentCountLabel(shownPlanCount),
+          },
+          ...planOptions,
+        ]
+      : planOptions;
+  const planReceipt = resolveStudentReceiptAmounts(app ?? {});
   // Typed something the override can't use (negative, not a number).
   // Said out loud, because otherwise Review just sits there disabled.
   const stagedInvalid =
@@ -6804,6 +6877,7 @@ function DecisionStudentRow({
       sufs_amount_input:
         app?.sufs_amount == null ? "" : String(app.sufs_amount),
     }));
+    setStagedPlanCount(null);
     setAmountsUnlocked(false);
     setOverridePreview(null);
     setOverrideReason("");
@@ -6831,6 +6905,7 @@ function DecisionStudentRow({
         ? { remainingOpportunityAmount: stagedRemaining }
         : {}),
       ...(sufsStaged ? { sufsAwardAmount: stagedSufs } : {}),
+      ...(planStaged ? { paymentCount: stagedPlanCount } : {}),
     };
   }
 
@@ -6942,6 +7017,7 @@ function DecisionStudentRow({
       setOverridePreview(null);
       setOverrideReason("");
       setOverrideStripeFailed(false);
+      setStagedPlanCount(null);
       setAmountsUnlocked(false);
     } catch (err) {
       // A failed save deliberately stays unlocked, dialog open, so
@@ -7391,6 +7467,72 @@ function DecisionStudentRow({
             </Field>
           </div>
 
+          {/* ─── Payment plan sub-card ─── How many monthly payments
+              the yearly amount above is spread over. A family that
+              starts partway through the year owes the same yearly
+              amount; the month of their first payment decides how
+              many payments it is split into (the last is always the
+              final month of the billing year). Saves on change like
+              the tier select; staged with the dollar inputs while
+              overriding. The server refuses a change once the student
+              has been billed. */}
+          <div className="rounded-md border bg-white p-4 space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Payment Plan
+            </h4>
+            <Field>
+              <FieldLabel className="text-xs">First payment month</FieldLabel>
+              <Select
+                value={shownPlanCount != null ? String(shownPlanCount) : ""}
+                disabled={
+                  !savedDetermination ||
+                  amountsReadOnly ||
+                  savingField !== null ||
+                  planPickerOptions.length === 0
+                }
+                onValueChange={(v) => {
+                  const next = Number(v);
+                  if (!Number.isInteger(next) || next < 1) return;
+                  // Override edits are staged — they save from the
+                  // review dialog, not on change.
+                  if (overriding) {
+                    setStagedPlanCount(next);
+                    return;
+                  }
+                  if (next === savedPlanCount) return;
+                  void patchPerStudentBilling({ paymentCount: next });
+                }}
+              >
+                <SelectTrigger className="w-full bg-white sm:w-80">
+                  <SelectValue placeholder="Not set" />
+                </SelectTrigger>
+                <SelectContent>
+                  {planPickerOptions.map((option) => (
+                    <SelectItem key={option.count} value={String(option.count)}>
+                      {option.firstMonthLabel} ·{" "}
+                      {paymentCountLabel(option.count)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <p className="text-[11px] text-muted-foreground">
+              {planPickerOptions.length === 0
+                ? "This school year has no billing start date, so payments can't be counted yet. Add one on the school year."
+                : !savedDetermination
+                  ? "Enter the amounts above first. The plan starts this month unless you pick a later one."
+                  : planStaged
+                    ? "Not saved yet. Review the change below to see the new monthly amount."
+                    : shownPlanCount == null
+                      ? `Saved before payment plans existed: $${formatCurrency2(planReceipt.monthly)}/mo is the yearly amount over 12 months. Pick the first payment month to spread it over the months that are left.`
+                      : `${shownPlanCount} monthly payment${shownPlanCount === 1 ? "" : "s"} of $${formatCurrency2(planReceipt.monthly)}${
+                          planRangeLabel(billingStartDate, shownPlanCount)
+                            ? ` (${planRangeLabel(billingStartDate, shownPlanCount)})`
+                            : ""
+                        }, $${formatCurrency2(planReceipt.subtotal)} for the year. Starting later never lowers the yearly amount; it is split into fewer payments.`}
+            </p>
+          </div>
+
           {/* ─── Amount override actions ─── Only while the lock is
               lifted. Review is the one way a staged amount gets
               saved: it opens the dialog that spells out the new
@@ -7402,7 +7544,7 @@ function DecisionStudentRow({
                   ? "Enter an amount of $0 or more."
                   : hasStagedChange
                     ? "Not saved yet."
-                    : "Change an amount above to review it."}
+                    : "Change an amount or the first payment month above to review it."}
               </span>
               <Button
                 type="button"
@@ -7731,6 +7873,12 @@ function DecisionStudentRow({
                       after={overridePreview.next.annual_fee}
                     />
                     <AmountChangeRow
+                      label="Monthly payments"
+                      format={(count) => paymentCountLabel(count)}
+                      before={overridePreview.current.payment_count}
+                      after={overridePreview.next.payment_count}
+                    />
+                    <AmountChangeRow
                       label="Monthly bill"
                       suffix="/mo"
                       emphasized
@@ -7840,15 +7988,19 @@ function AmountChangeRow({
   after,
   suffix = "",
   emphasized = false,
+  format,
 }: {
   label: string;
   before: number;
   after: number;
   suffix?: string;
   emphasized?: boolean;
+  /** For a figure that isn't dollars (the number of payments). */
+  format?: (value: number) => string;
 }) {
   const changed = before !== after;
-  const money = (v: number) => `$${formatCurrency2(v)}${suffix}`;
+  const money = (v: number) =>
+    format ? format(v) : `$${formatCurrency2(v)}${suffix}`;
   return (
     <tr className={emphasized ? "bg-muted/40" : "bg-white"}>
       <td

@@ -13,6 +13,7 @@ import {
   indexTransactionsByMonth,
   stripeStatusToUi,
 } from "@/lib/billing-schedule";
+import { planYearTotalCents } from "@/lib/payment-plan";
 import { getNextInvoiceTiming } from "@/lib/stripe";
 
 /**
@@ -212,9 +213,12 @@ async function handleGET(
       };
     });
 
-    // Aggregations across the year — used in the summary header.
+    // Aggregations across the year — used in the summary header. The
+    // year total is each student's monthly times their own number of
+    // payments (12 on a full-year plan, fewer for a mid-year start),
+    // not `monthly × 12`.
     const yearTotalCents =
-      monthlyAmountCents != null ? monthlyAmountCents * 12 : null;
+      monthlyAmountCents != null ? planYearTotalCents(activeApps) : null;
     const paidCents = transactions.reduce(
       (acc, t) => acc + (t.amount_paid_cents ?? 0),
       0

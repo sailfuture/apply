@@ -584,6 +584,12 @@ export interface XanoApplication {
   sufs_amount?: number | null;
   tuition_sub_total?: number | null;
   monthly_amount?: number | null;
+  /** Number of monthly payments `tuition_sub_total` is spread over
+   *  (1–12). The last payment is always the billing year's final
+   *  month, so 7 means January through July. Null / 0 on a row saved
+   *  before payment plans existed: those bill over 12. See
+   *  `lib/payment-plan.ts`. */
+  payment_count?: number | null;
   /** Family-paid portion of tuition via the Opportunity Scholarship
    *  remainder — the "Remaining Amount Family Pays" admin enters on
    *  the Determination card. The Opportunity Scholarship covers the

@@ -26,6 +26,11 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
+import {
+  FULL_YEAR_PAYMENTS,
+  planSummaryLabel,
+  resolvedPaymentCount,
+} from "@/lib/payment-plan";
 
 /** Human-readable labels for SUFS award types */
 const SUFS_LABELS: Record<string, string> = {
@@ -64,6 +69,10 @@ interface StudentRow {
    *  (not `subtotal / 12`) for the family's monthly figure so the
    *  receipt matches the invoice to the cent. */
   monthly: number;
+  /** Stored `payment_count`: how many monthly payments the subtotal
+   *  is spread over. Empty on a row saved before payment plans
+   *  existed (those run 12). */
+  paymentCount: number | null | undefined;
 }
 
 function formatCurrency(value: number): string {
@@ -283,6 +292,7 @@ export default function TuitionPage() {
       annual_fee?: number | null;
       remaining_opportunity_amount?: number | null;
       monthly_amount?: number | null;
+      payment_count?: number | null;
       confirmed_scholarship?: boolean;
     }[]).filter((a) => a.registration_school_years_id === yearId);
 
@@ -356,6 +366,7 @@ export default function TuitionPage() {
         hasOSDetermination,
         subtotal,
         monthly: resolveStudentReceiptAmounts(app).monthly,
+        paymentCount: app.payment_count,
       });
     }
 
@@ -376,6 +387,17 @@ export default function TuitionPage() {
   // rounded amount, so two students at $41.67 are billed $83.34 and
   // the old division printed a cent less than the family owes.
   const monthlyTotal = sumStudentMonthly(studentRows);
+  // Which months the monthly figure runs: a family that starts
+  // partway through the year pays the same yearly total over the
+  // months that are left, not over 12.
+  const planLabel = planSummaryLabel(
+    (schoolYear as { billing_start_date?: string | null } | null)
+      ?.billing_start_date,
+    studentRows.map((r) => r.paymentCount)
+  );
+  const onShortPlan = studentRows.some(
+    (r) => resolvedPaymentCount(r.paymentCount) < FULL_YEAR_PAYMENTS
+  );
 
   // Every pen stroke uploads a fresh snapshot of the whole pad, and the
   // uploads finish in whatever order the network likes. Only the NEWEST
@@ -692,11 +714,19 @@ export default function TuitionPage() {
                   <td className="px-4 py-3 text-right font-bold">${formatCurrency(grandTotal)}</td>
                 </tr>
                 <tr className="border-t bg-white">
-                  <td className="px-4 py-3 font-bold">Monthly Payment (Aug – Jul, 12 months)</td>
+                  <td className="px-4 py-3 font-bold">Monthly Payment ({planLabel})</td>
                   <td className="px-4 py-3 text-right font-bold">${formatCurrency(monthlyTotal)}/mo</td>
                 </tr>
               </tbody>
             </table>
+            {onShortPlan ? (
+              <p className="border-t bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+                The total for the year is the same whenever a student
+                starts. It is spread over the months left in the school
+                year, so if enrollment is finished in a later month the
+                same total is split into fewer, larger payments.
+              </p>
+            ) : null}
           </div>
 
           {/* Acknowledgment & Signature */}

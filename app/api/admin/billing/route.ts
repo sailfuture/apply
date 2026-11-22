@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import { parseAnchorDate, buildMonthSlots } from "@/lib/billing-schedule";
+import { resolvedPaymentCount } from "@/lib/payment-plan";
 import { getNextInvoiceTiming, getStripeClient } from "@/lib/stripe";
 import {
   isMidYearAddition,
@@ -161,6 +162,10 @@ async function handleGET(req: NextRequest) {
     // counting them here would overstate every total on this list
     // and the XLSX export.
     const monthlyByFamily = new Map<number, number>();
+    // What each family pays across the billing year: every student's
+    // monthly times that student's own number of payments (12 on a
+    // full-year plan, fewer for a mid-year start). Not `monthly × 12`.
+    const yearTotalByFamily = new Map<number, number>();
     // Active students carrying NO monthly amount. They contribute
     // $0 to the sum above, so a family with one priced student and
     // one unpriced one looks perfectly startable here while
@@ -210,7 +215,16 @@ async function handleGET(req: NextRequest) {
         continue;
       }
       monthlyByFamily.set(fid, (monthlyByFamily.get(fid) ?? 0) + amount);
+      yearTotalByFamily.set(
+        fid,
+        (yearTotalByFamily.get(fid) ?? 0) +
+          amount * resolvedPaymentCount(app.payment_count)
+      );
     }
+    const yearTotalFor = (familyId: number): number | null => {
+      const total = yearTotalByFamily.get(familyId);
+      return total && total > 0 ? Math.round(total * 100) / 100 : null;
+    };
 
     // Aggregate transactions by family id once so the per-row
     // reduce below is O(1) per family. `paid` = sum of amount_paid
@@ -303,7 +317,7 @@ async function handleGET(req: NextRequest) {
         const primary = primaryByFamily.get(familyId) ?? null;
         const derived = monthlyByFamily.get(familyId);
         const monthly = derived && derived > 0 ? derived : null;
-        const yearTotal = monthly != null ? monthly * 12 : null;
+        const yearTotal = monthly != null ? yearTotalFor(familyId) : null;
         const agg = aggByFamily.get(familyId) ?? {
           paidCents: 0,
           outstandingCents: 0,
@@ -480,7 +494,7 @@ async function handleGET(req: NextRequest) {
               primary_email: n.primary_email,
               monthly_tuition: n.monthly_tuition,
               year_total:
-                n.monthly_tuition != null ? n.monthly_tuition * 12 : null,
+                n.monthly_tuition != null ? yearTotalFor(n.family_id) : null,
               paid_cents: 0,
               outstanding_cents: 0,
               invoices_issued: 0,
@@ -556,7 +570,9 @@ export interface BillingRow {
   primary_name: string;
   primary_email: string;
   monthly_tuition: number | null;
-  /** monthly_tuition × 12, or null when monthly isn't set yet. */
+  /** What the family pays across the billing year: each student's
+   *  monthly times their own number of payments. Null when monthly
+   *  isn't set yet. */
   year_total: number | null;
   /** Sum of `amount_paid_cents` across every invoice this family
    *  has for the year. Updates each time the webhook upserts a

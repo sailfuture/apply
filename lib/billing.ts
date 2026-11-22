@@ -3,6 +3,7 @@ import {
   xano,
   activeStripeSubscriptionId,
   liveStripeSubscriptionItemId,
+  type XanoApplication,
 } from "@/lib/xano";
 import {
   addStudentItemToSubscription,
@@ -10,10 +11,22 @@ import {
   getBillingSnapshot,
   getOrCreateCustomer,
   uncancelSubscription,
+  yearRuleFirstInvoiceMs,
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
 import { enableAutopay } from "@/lib/autopay";
 import { isPendingMidYearAddition } from "@/lib/midyear-additions";
+import {
+  FULL_YEAR_PAYMENTS,
+  billingSlotAt,
+  monthlyForPlan,
+  paymentsFrom,
+  planFirstMonthLabel,
+  planFirstSlotStartMs,
+  planRangeLabel,
+  storedPaymentCount,
+} from "@/lib/payment-plan";
+import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
 
 /**
  * Server-side billing orchestration. Called from two places:
@@ -54,6 +67,167 @@ export interface StartBillingResult {
    *  subscription already existed on the family-payment row and we
    *  returned it unchanged. */
   created: boolean;
+  /** Students whose monthly amount moved because their payment plan
+   *  was set (or shortened) as billing started. Empty when every
+   *  student was billed the amount already on file. */
+  planChanges: PaymentPlanChange[];
+}
+
+/** A student's payment plan as (re)set when their billing started. */
+export interface PaymentPlanChange {
+  studentId: number;
+  studentName: string;
+  /** Payments the amount on file was spread over. */
+  fromCount: number;
+  toCount: number;
+  fromMonthly: number;
+  toMonthly: number;
+}
+
+const usd = (value: number) =>
+  value.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+/** The yearly amount a student's plan divides: the stored subtotal,
+ *  or the stored remaining amount + fee for a row without one. */
+function annualFamilyPaid(app: XanoApplication): number {
+  return typeof app.tuition_sub_total === "number" &&
+    Number.isFinite(app.tuition_sub_total)
+    ? app.tuition_sub_total
+    : resolveStudentReceiptAmounts(app).subtotal;
+}
+
+/**
+ * Put a student who has never been billed on a `count`-payment plan,
+ * so the yearly amount they owe is collected by the last month of the
+ * billing year. Returns the row as it now stands and, when the monthly
+ * amount moved, what changed.
+ *
+ * Runs BEFORE anything is sent to Stripe: a save that doesn't land
+ * throws, so a family is never invoiced an amount the app doesn't
+ * show. Never called for a student with billing history: their plan
+ * is already in motion and re-dividing the full yearly amount would
+ * charge them for months they have paid.
+ */
+async function stampPaymentPlan(
+  app: XanoApplication,
+  count: number,
+  studentName: string
+): Promise<{ app: XanoApplication; change: PaymentPlanChange | null }> {
+  const stored = storedPaymentCount(app.payment_count);
+  if (stored === count) return { app, change: null };
+
+  const divisor = stored ?? FULL_YEAR_PAYMENTS;
+  if (count === divisor) {
+    // A row saved before plans existed, already priced over 12 and
+    // starting on a 12-payment plan: record the plan, leave the amount
+    // alone. Not worth failing a billing start over.
+    try {
+      await xano.applications.update(app.id, { payment_count: count });
+    } catch (err) {
+      console.error(
+        `[stampPaymentPlan] couldn't record payment_count ${count} on application ${app.id}:`,
+        err
+      );
+    }
+    return { app: { ...app, payment_count: count }, change: null };
+  }
+
+  const annual = annualFamilyPaid(app);
+  const fromMonthly = app.monthly_amount ?? 0;
+  // The new monthly is the yearly amount over the new count. If the
+  // amount on file isn't the yearly amount over the OLD count, someone
+  // set it by hand and re-dividing would silently discard that.
+  if (Math.abs(fromMonthly - monthlyForPlan(annual, divisor)) > 0.011) {
+    throw new BillingPreconditionError(
+      `${studentName}'s monthly amount (${usd(fromMonthly)}) isn't their yearly amount (${usd(annual)}) spread over ${divisor} payments, so their payment plan can't be set automatically. Re-save their amounts on the Scholarship Determination card, then start billing.`
+    );
+  }
+  const toMonthly = monthlyForPlan(annual, count);
+  const updated = await xano.applications.update(app.id, {
+    payment_count: count,
+    monthly_amount: toMonthly,
+  });
+  // Xano drops inputs it treats as empty instead of erroring; billing
+  // an amount the row doesn't hold is worse than not billing.
+  if (
+    storedPaymentCount(updated.payment_count) !== count ||
+    Math.abs(Number(updated.monthly_amount ?? Number.NaN) - toMonthly) > 0.005
+  ) {
+    throw new Error(
+      `The payment plan for ${studentName} (application ${app.id}) didn't save, so billing wasn't started. Try again.`
+    );
+  }
+  return {
+    app: { ...app, payment_count: count, monthly_amount: toMonthly },
+    change: {
+      studentId: Number(app.registration_students_id),
+      studentName,
+      fromCount: divisor,
+      toCount: count,
+      fromMonthly,
+      toMonthly,
+    },
+  };
+}
+
+/** When (unix ms) a live subscription sends its next invoice, read off
+ *  the subscription itself. Null when Stripe's object doesn't say. */
+function nextInvoiceMsOf(subscription: Stripe.Subscription): number | null {
+  const nowUnix = Math.floor(Date.now() / 1000);
+  if (subscription.status === "trialing" && subscription.trial_end) {
+    return subscription.trial_end * 1000;
+  }
+  if (subscription.billing_cycle_anchor > nowUnix) {
+    return subscription.billing_cycle_anchor * 1000;
+  }
+  // Billing periods live on the items (flexible billing mode has no
+  // subscription-level current_period_end).
+  const cycleEnd = subscription.items.data[0]?.current_period_end;
+  return cycleEnd && cycleEnd > nowUnix ? cycleEnd * 1000 : null;
+}
+
+/**
+ * Leave a line on the family's timeline when billing started on a
+ * different monthly amount than the one on file. Best-effort: the
+ * plan is saved and billing is going ahead either way.
+ */
+async function notePaymentPlanChanges(args: {
+  familyId: number;
+  yearId: number;
+  yearName: string;
+  billingStartDate: string | null;
+  changes: PaymentPlanChange[];
+}): Promise<void> {
+  if (args.changes.length === 0) return;
+  try {
+    const lines = args.changes.map((c) => {
+      const range = planRangeLabel(args.billingStartDate, c.toCount);
+      return `${c.studentName}: ${c.toCount} monthly payment${c.toCount === 1 ? "" : "s"} of ${usd(c.toMonthly)}${range ? ` (${range})` : ""}. Was ${usd(c.fromMonthly)} over ${c.fromCount}.`;
+    });
+    await xano.adminNotes.create({
+      registration_families_id: args.familyId,
+      registration_students_id:
+        args.changes.length === 1 ? args.changes[0].studentId : null,
+      registration_school_years_id: args.yearId,
+      registration_student_registration_progress_id: null,
+      registration_family_application_progress_id: null,
+      author_email: "",
+      author_name: "Apply (automatic)",
+      body: [
+        `Payment plan set as monthly billing started (${args.yearName}). The yearly amount is unchanged; it is spread over the payments left in the billing year.`,
+        ...lines,
+      ].join("\n"),
+      category: "other",
+      is_pinned: false,
+      section: "billing",
+      is_shared_with_parent: false,
+    });
+  } catch (err) {
+    console.error(
+      `[notePaymentPlanChanges] timeline note failed (family ${args.familyId}, year ${args.yearId}):`,
+      err
+    );
+  }
 }
 
 /**
@@ -256,12 +430,13 @@ async function startMonthlyBillingInner({
       if (snapshot.subscription.cancel_at_period_end) {
         await uncancelSubscription(existingSubId);
       }
-      await reconcileSubscriptionItems({
+      const reconciled = await reconcileSubscriptionItems({
         subscription: snapshot.subscription,
         familyId,
         yearId,
         familyName: family.family_name,
         yearName: year.year_name,
+        billingStartDate: year.billing_start_date ?? null,
         activeApps,
         familyStudentById,
         packetByStudent,
@@ -269,8 +444,115 @@ async function startMonthlyBillingInner({
       // Re-read so the returned subscription reflects any items the
       // reconcile just added.
       const refreshed = await getBillingSnapshot(existingSubId);
-      return { subscription: refreshed.subscription, created: false };
+      return {
+        subscription: refreshed.subscription,
+        created: false,
+        planChanges: reconciled.planChanges,
+      };
     }
+  }
+
+  // ─── Payment plan ─── The yearly amount is never prorated for a
+  // late start; it is spread over the payments left in the billing
+  // year, and the month a family enrolls is their first payment
+  // (`lib/payment-plan.ts`). Settled here, before anything reaches
+  // Stripe, so the amounts invoiced are the amounts on file.
+  const billingStartDate = year.billing_start_date ?? null;
+  const nameOf = (app: XanoApplication) => {
+    const sid = Number(app.registration_students_id);
+    const student = familyStudentById.get(sid);
+    return (
+      (student
+        ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim()
+        : "") || `Student #${sid}`
+    );
+  };
+  // Never billed = no Stripe item handle on the packet, live or since
+  // removed. A family with ANY billing history (a restart after a
+  // cancel) keeps the year-level timing: "invoice now" could charge a
+  // month they have already paid.
+  const neverBilled = (app: XanoApplication) =>
+    !packetByStudent.get(Number(app.registration_students_id))
+      ?.stripe_subscription_item_id;
+  const firstTimeFamily = activeApps.every(neverBilled);
+
+  let firstInvoice: "now" | number | undefined;
+  /** The plan every never-billed student goes on. */
+  let planCount: number;
+  if (firstTimeFamily) {
+    const nowMs = Date.now();
+    const slotNow = billingSlotAt(billingStartDate, nowMs);
+    // The longest plan still possible: first payment this month.
+    const openCount = paymentsFrom(billingStartDate, nowMs);
+    if (openCount < FULL_YEAR_PAYMENTS) {
+      // Starting partway through the year on amounts saved before
+      // plans existed: those were priced over 12, and whether the
+      // typed amount was meant to be re-spread is the school's call,
+      // not a guess to make while creating a subscription.
+      const unplanned = activeApps.filter(
+        (app) => storedPaymentCount(app.payment_count) == null
+      );
+      if (unplanned.length > 0) {
+        throw new BillingPreconditionError(
+          `No payment plan is set for: ${unplanned.map(nameOf).join(", ")}. ` +
+            `This family is starting partway through the billing year, so choose each student's first payment month on the Scholarship Determination card, then start billing.`
+        );
+      }
+    }
+    // A plan whose first month has passed moves to the longest one
+    // left; a plan that starts later than this month is kept.
+    const plans = activeApps.map((app) => ({
+      app,
+      count: Math.min(
+        storedPaymentCount(app.payment_count) ?? openCount,
+        openCount
+      ),
+    }));
+    if (new Set(plans.map((p) => p.count)).size > 1) {
+      throw new BillingPreconditionError(
+        `These students have different first payment months: ${plans
+          .map(
+            (p) =>
+              `${nameOf(p.app)} (${planFirstMonthLabel(billingStartDate, p.count) ?? `${p.count} payments`})`
+          )
+          .join(", ")}. ` +
+          `A family gets one invoice a month, so set the same first payment month for each of them on the Scholarship Determination card, then start billing.`
+      );
+    }
+    planCount = plans[0].count;
+    const planStartMs = planFirstSlotStartMs(billingStartDate, planCount);
+    if (slotNow == null || (slotNow < 0 && planCount === FULL_YEAR_PAYMENTS)) {
+      // No billing calendar, or a full-year plan set up before the
+      // year opens: the year-level rule (first invoice on the billing
+      // start date), exactly as before plans existed.
+      firstInvoice = undefined;
+    } else if (planCount === openCount || planStartMs == null) {
+      // The enrollment month is the first payment.
+      firstInvoice = "now";
+    } else {
+      // First payment is a later month: hold the first invoice until
+      // it opens (05:00 UTC, about midnight Eastern, so it is dated
+      // the 1st on the school's calendar).
+      firstInvoice = Math.floor(planStartMs / 1000) + 5 * 60 * 60;
+    }
+  } else {
+    firstInvoice = undefined;
+    planCount = paymentsFrom(
+      billingStartDate,
+      yearRuleFirstInvoiceMs(billingStartDate, year.start_date ?? null)
+    );
+  }
+
+  const planChanges: PaymentPlanChange[] = [];
+  const billableApps: XanoApplication[] = [];
+  for (const app of activeApps) {
+    if (!neverBilled(app)) {
+      billableApps.push(app);
+      continue;
+    }
+    const stamped = await stampPaymentPlan(app, planCount, nameOf(app));
+    billableApps.push(stamped.app);
+    if (stamped.change) planChanges.push(stamped.change);
   }
 
   // Primary parent — lowest id wins, matching how every other admin
@@ -320,15 +602,13 @@ async function startMonthlyBillingInner({
   // Price's product is named `<Student> — Monthly Tuition & Fees`
   // so the parent's invoice line shows the student. Monthly amount
   // sourced from the application row.
-  const studentItems = activeApps.map((app) => {
-    const sid = Number(app.registration_students_id);
-    const student = familyStudentById.get(sid);
-    const studentName = student
-      ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
-        `Student #${sid}`
-      : `Student #${sid}`;
+  const studentItems = billableApps.map((app) => {
     const monthlyCents = Math.round((app.monthly_amount ?? 0) * 100);
-    return { studentId: sid, studentName, monthlyCents };
+    return {
+      studentId: Number(app.registration_students_id),
+      studentName: nameOf(app),
+      monthlyCents,
+    };
   });
 
   const result = await createSubscriptionWithStudentItems({
@@ -336,21 +616,32 @@ async function startMonthlyBillingInner({
     familyName: family.family_name,
     yearName: year.year_name,
     students: studentItems,
-    billingStartDate: year.billing_start_date ?? null,
-    // First day of school — the pivot for the late-enrollment rule
-    // (enrolled before/on it: owes the current month now; after it:
-    // billing starts the 1st of next month).
+    billingStartDate,
+    // First day of school — the pivot of the year-level rule, which
+    // only times the first invoice when `firstInvoice` is left out (a
+    // family with billing history, or a full-year plan set up before
+    // the year opens).
     yearStartDate: year.start_date ?? null,
+    firstInvoice,
     familyId,
     yearId,
     // Deterministic per (family, year, prior-subscription-state, item
-    // composition): concurrent/retried starts collapse onto the same
-    // Stripe objects instead of double-subscribing, while a
-    // legitimate restart after a cancel (different prior state) or a
-    // changed roster/amount (different item signature) gets fresh
-    // keys — reusing a key with DIFFERENT params would make Stripe
-    // reject the call with an idempotency conflict.
-    idempotencyKeyBase: `tuition:f${familyId}:y${yearId}:prev-${payment?.stripe_subscription_id ?? "none"}:i${itemsSignature(studentItems)}`,
+    // composition, first-invoice timing): concurrent/retried starts
+    // collapse onto the same Stripe objects instead of
+    // double-subscribing, while a legitimate restart after a cancel
+    // (different prior state) or a changed roster/amount (different
+    // item signature) gets fresh keys — reusing a key with DIFFERENT
+    // params would make Stripe reject the call with an idempotency
+    // conflict.
+    idempotencyKeyBase: `tuition:f${familyId}:y${yearId}:prev-${payment?.stripe_subscription_id ?? "none"}:i${itemsSignature(studentItems)}${firstInvoice === undefined ? "" : `:fi-${firstInvoice}`}`,
+  });
+
+  await notePaymentPlanChanges({
+    familyId,
+    yearId,
+    yearName: year.year_name,
+    billingStartDate,
+    changes: planChanges,
   });
 
   // Persist the family-level subscription id onto the family-payment
@@ -415,7 +706,7 @@ async function startMonthlyBillingInner({
     );
   }
 
-  return { subscription: result.subscription, created: true };
+  return { subscription: result.subscription, created: true, planChanges };
 }
 
 /**
@@ -432,6 +723,9 @@ interface ReconcileContext {
   yearId: number;
   familyName: string;
   yearName: string;
+  /** The year's `billing_start_date`: anchors the month slots a
+   *  first-time student's payments are counted on. */
+  billingStartDate: string | null;
   activeApps: Awaited<ReturnType<typeof xano.applications.getByFamilyId>>;
   familyStudentById: Map<
     number,
@@ -458,18 +752,29 @@ interface ReconcileContext {
  * no code path that ever added their Stripe item — every admin
  * surface showed the higher intended total while Stripe kept
  * invoicing the stale item set. Returns how many items were added.
+ *
+ * A student who has NEVER been billed (a sibling added mid-year) is
+ * put on a payment plan first: an added item is first charged on the
+ * subscription's next invoice, so their yearly amount is spread over
+ * the invoices from that one through the end of the billing year. A
+ * student with billing history (un-archived, reactivated) is re-added
+ * at the amount on file — re-dividing their full yearly amount would
+ * charge them again for months they have paid.
  */
 async function reconcileSubscriptionItems(
   ctx: ReconcileContext
-): Promise<number> {
+): Promise<{ added: number; planChanges: PaymentPlanChange[] }> {
   const itemByStudent = new Map<number, string>();
   for (const item of ctx.subscription.items.data) {
     const sid = Number(item.metadata?.student_id);
     if (Number.isFinite(sid)) itemByStudent.set(sid, item.id);
   }
+  const nextInvoiceMs = nextInvoiceMsOf(ctx.subscription);
 
   let added = 0;
-  for (const app of ctx.activeApps) {
+  const planChanges: PaymentPlanChange[] = [];
+  for (const listedApp of ctx.activeApps) {
+    let app: XanoApplication = listedApp;
     const sid = Number(app.registration_students_id);
     const packet = ctx.packetByStudent.get(sid);
     const liveItemId = itemByStudent.get(sid) ?? null;
@@ -500,14 +805,31 @@ async function reconcileSubscriptionItems(
     // raced) is STALE — trusting it here would skip the student and
     // silently never bill them again, so we fall through and re-add,
     // overwriting the stale handle on persist.
-    const monthly = app.monthly_amount;
-    if (typeof monthly !== "number" || monthly <= 0) continue; // caller validates; defensive
+    if (typeof app.monthly_amount !== "number" || app.monthly_amount <= 0) {
+      continue; // caller validates; defensive
+    }
 
     const student = ctx.familyStudentById.get(sid);
     const studentName = student
       ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
         `Student #${sid}`
       : `Student #${sid}`;
+
+    // First-time student: count their payments from the invoice this
+    // item first lands on. Throws (nothing added) if the plan can't be
+    // saved, so they are never invoiced an amount the app doesn't show.
+    const everBilled = Boolean(packet?.stripe_subscription_item_id);
+    if (!everBilled && nextInvoiceMs != null) {
+      const stamped = await stampPaymentPlan(
+        app,
+        paymentsFrom(ctx.billingStartDate, nextInvoiceMs),
+        studentName
+      );
+      app = stamped.app;
+      if (stamped.change) planChanges.push(stamped.change);
+    }
+    const monthly = app.monthly_amount ?? 0;
+
     const result = await addStudentItemToSubscription({
       subscriptionId: ctx.subscription.id,
       familyName: ctx.familyName,
@@ -539,7 +861,14 @@ async function reconcileSubscriptionItems(
       );
     }
   }
-  return added;
+  await notePaymentPlanChanges({
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+    yearName: ctx.yearName,
+    billingStartDate: ctx.billingStartDate,
+    changes: planChanges,
+  });
+  return { added, planChanges };
 }
 
 /**
@@ -666,12 +995,13 @@ async function reconcileFamilySubscriptionItemsInner(
     );
   }
 
-  const added = await reconcileSubscriptionItems({
+  const { added } = await reconcileSubscriptionItems({
     subscription: snapshot.subscription,
     familyId,
     yearId,
     familyName: family.family_name,
     yearName: year.year_name,
+    billingStartDate: year.billing_start_date ?? null,
     activeApps,
     familyStudentById,
     packetByStudent,

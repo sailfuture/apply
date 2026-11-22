@@ -15,6 +15,7 @@ import {
   isMidYearAddition,
   isPendingMidYearAddition,
 } from "@/lib/midyear-additions";
+import { monthlyForPlan, resolvedPaymentCount } from "@/lib/payment-plan";
 
 /**
  * Last-resort fallback for the per-student annual fee when the
@@ -50,7 +51,14 @@ export const FALLBACK_PER_STUDENT_ANNUAL_FEE = 500;
  *   - `tuition_sub_total`           — family-paid annual total
  *                                    (`remaining_opportunity_amount +
  *                                    annual_fee`).
- *   - `monthly_amount`              — `tuition_sub_total / 12`.
+ *   - `payment_count`               — monthly payments that total is
+ *                                    spread over: 12 for a full year,
+ *                                    fewer for a family starting
+ *                                    mid-year (`lib/payment-plan.ts`).
+ *                                    A late start never reduces the
+ *                                    total, only this count.
+ *   - `monthly_amount`              — `tuition_sub_total /
+ *                                    payment_count`.
  *
  * Worked example (year tuition = $27,522, SUFS FTC Grade 9 = $7,770,
  * Remaining Amount Family Pays = $0, annual fee = $500):
@@ -61,6 +69,7 @@ export const FALLBACK_PER_STUDENT_ANNUAL_FEE = 500;
  *   annual_fee                    = 500
  *   tuition_sub_total             = 0 + 500 = 500
  *   monthly_amount                = 500 / 12 = $41.67
+ * The same student starting in January (7 payments): 500 / 7 = $71.43.
  */
 export interface PacketBillingValues {
   sufs_amount: number;
@@ -69,6 +78,7 @@ export interface PacketBillingValues {
   opportunity_award_amount: number;
   annual_fee: number;
   tuition_sub_total: number;
+  payment_count: number;
   monthly_amount: number;
 }
 
@@ -78,6 +88,7 @@ export function derivePacketBillingValues({
   sufsAwardAmount,
   remainingOpportunityAmount,
   annualFee,
+  paymentCount,
 }: {
   schoolYearTuition: number;
   /** Per-student annual fee for the school year, sourced from
@@ -96,6 +107,9 @@ export function derivePacketBillingValues({
    *  scholarship recipient with fee included elsewhere). When set,
    *  takes precedence over `schoolYearAnnualFees`. */
   annualFee?: number | null;
+  /** Monthly payments the family-paid total is spread over. Anything
+   *  that isn't a whole number from 1 to 12 reads as a full year. */
+  paymentCount?: number | null;
 }): PacketBillingValues {
   const sufs = Number.isFinite(sufsAwardAmount) ? sufsAwardAmount : 0;
   const remaining = Number.isFinite(remainingOpportunityAmount)
@@ -125,10 +139,11 @@ export function derivePacketBillingValues({
     0
   );
   const tuition_sub_total = remaining + fee;
-  // Round monthly to 2 decimal places — Stripe accepts integer
-  // cents downstream, this just keeps the stored figure readable
-  // for admin surfaces.
-  const monthly_amount = Math.round((tuition_sub_total / 12) * 100) / 100;
+  // The whole yearly amount over the plan's payments: a late start
+  // shortens the plan, it never discounts the total. Rounded to cents
+  // (Stripe takes integer cents downstream).
+  const payment_count = resolvedPaymentCount(paymentCount);
+  const monthly_amount = monthlyForPlan(tuition_sub_total, payment_count);
 
   return {
     sufs_amount: sufs,
@@ -137,6 +152,7 @@ export function derivePacketBillingValues({
     opportunity_award_amount,
     annual_fee: fee,
     tuition_sub_total,
+    payment_count,
     monthly_amount,
   };
 }
@@ -519,8 +535,9 @@ export interface FamilyBillingTotals {
    *  Scholarship coverage across active students. */
   oppAwardTotal: number;
   /** Σ `app.tuition_sub_total` — annual family-paid total before
-   *  monthly division. Should equal `monthlyTotal * 12` within
-   *  rounding. */
+   *  monthly division. Equals each student's monthly times their own
+   *  `payment_count`, within rounding (`monthlyTotal * 12` only when
+   *  every student is on a full-year plan). */
   subTotal: number;
   /** Count of applications that contributed to the sums. */
   activeStudentCount: number;

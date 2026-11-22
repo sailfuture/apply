@@ -511,11 +511,22 @@ export async function GET(req: NextRequest) {
           for (const c of candidates) {
             try {
               const sub = await stripe.subscriptions.retrieve(c.subId);
-              const ageMs = Date.now() - sub.created * 1000;
+              // Counted from when the FIRST INVOICE was due, which is
+              // the creation date unless it was held: a payment plan
+              // whose first payment is a later month (trial), or a
+              // cycle anchored ahead. A family set up in November to
+              // start paying in January has nothing overdue until
+              // then, however old the subscription is.
+              const firstInvoiceDueUnix = Math.max(
+                sub.created,
+                sub.trial_end ?? 0,
+                sub.billing_cycle_anchor ?? 0
+              );
+              const ageMs = Date.now() - firstInvoiceDueUnix * 1000;
               if (ageMs > graceMs) {
                 silent.push({
                   ...c,
-                  age: `created ${Math.floor(ageMs / ONE_DAY_MS)} days ago`,
+                  age: `first invoice was due ${Math.floor(ageMs / ONE_DAY_MS)} days ago`,
                 });
               }
             } catch (err) {
@@ -542,7 +553,7 @@ export async function GET(req: NextRequest) {
             await sendBillingAlert(
               `${silent.length} live subscription(s) with no mirrored invoices`,
               [
-                `These families have a Stripe subscription for the ${year.year_name} school year that is more than a week old, but ZERO invoices in the billing mirror:`,
+                `These families have a Stripe subscription for the ${year.year_name} school year whose first invoice was due more than a week ago, but ZERO invoices in the billing mirror:`,
                 ...named.map(
                   (s) =>
                     `  - ${s.label} — subscription ${s.subId}, ${s.age}`

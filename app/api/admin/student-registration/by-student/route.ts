@@ -16,6 +16,12 @@ import {
   type PacketBillingValues,
 } from "@/lib/per-student-billing";
 import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
+import {
+  paymentsFrom,
+  planFirstMonthLabel,
+  resolvedPaymentCount,
+  storedPaymentCount,
+} from "@/lib/payment-plan";
 
 /**
  * Per-student billing PATCH keyed on `(studentId, yearId)` rather
@@ -31,6 +37,7 @@ import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
  *     yearId: number,
  *     sufsAwardAmount?: number,
  *     remainingOpportunityAmount?: number,
+ *     paymentCount?: number,     // monthly payments (1–12), see below
  *     dryRun?: boolean,
  *     reason?: string,
  *     notifyParents?: boolean,   // email the new monthly once Stripe has it
@@ -47,6 +54,14 @@ import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
  * `stripe_subscription_item_id` (the Stripe-side link) so when
  * billing is live we still re-price the Stripe item to match the
  * new amount.
+ *
+ * Payment plan. The family-paid total is never prorated for a late
+ * start; it is spread over the payments left in the billing year
+ * (`lib/payment-plan.ts`). `paymentCount` picks the plan, i.e. the
+ * month of the first payment. Left out, the row keeps its plan, or
+ * gets the longest one still possible ("first payment this month")
+ * when it has none or its first month has passed. Once the student
+ * has been billed the plan is in motion and can't be changed here.
  *
  * Amount overrides. Once a student's award is confirmed and amounts
  * are on file, the Determination card locks the dollar inputs — the
@@ -73,6 +88,7 @@ const ECHO_CHECKED_COLUMNS = [
   "remaining_opportunity_amount",
   "sufs_amount",
   "annual_fee",
+  "payment_count",
   "monthly_amount",
 ] as const satisfies ReadonlyArray<keyof PacketBillingValues>;
 
@@ -146,6 +162,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const hasPaymentCount = Object.prototype.hasOwnProperty.call(
+      body,
+      "paymentCount"
+    );
+    const paymentCountInput = hasPaymentCount
+      ? storedPaymentCount(Number(body.paymentCount))
+      : null;
+    if (hasPaymentCount && paymentCountInput == null) {
+      return NextResponse.json(
+        { error: "paymentCount must be a whole number from 1 to 12" },
+        { status: 400 }
+      );
+    }
+
     const dryRun = body?.dryRun === true;
     const reason =
       typeof body?.reason === "string" ? body.reason.trim() : "";
@@ -194,6 +224,57 @@ export async function POST(req: NextRequest) {
         ? app.annual_fee
         : null;
 
+    // The packet says whether this student has ever been billed (its
+    // Stripe item handle is set, live or since removed). `undefined`
+    // = the read failed and we can't tell.
+    let packet: Awaited<ReturnType<typeof findPacket>> | undefined;
+    try {
+      packet = await findPacket(studentId, yearId);
+    } catch (err) {
+      console.error(
+        "[/api/admin/student-registration/by-student] packet read failed:",
+        err
+      );
+    }
+    const everBilled = Boolean(packet?.stripe_subscription_item_id);
+
+    // Payment plan. `openCount` is the longest plan still possible:
+    // a first payment this month.
+    const storedCount = storedPaymentCount(app.payment_count);
+    const beforeCount = resolvedPaymentCount(app.payment_count);
+    const billingStartDate = schoolYear?.billing_start_date ?? null;
+    const openCount = paymentsFrom(billingStartDate, Date.now());
+    let paymentCount: number;
+    if (packet === undefined || everBilled) {
+      // In motion (or unknown): the count the row already bills over.
+      paymentCount = beforeCount;
+      if (paymentCountInput != null && paymentCountInput !== paymentCount) {
+        return NextResponse.json(
+          {
+            error: everBilled
+              ? "Monthly billing has already started for this student, so the number of payments can't be changed here."
+              : "Couldn't check whether billing has started for this student. Try again in a moment.",
+          },
+          { status: everBilled ? 409 : 503 }
+        );
+      }
+    } else if (paymentCountInput != null) {
+      if (paymentCountInput > openCount) {
+        const earliest = planFirstMonthLabel(billingStartDate, openCount);
+        return NextResponse.json(
+          {
+            error: `The first payment can't be in a month that has already passed${earliest ? ` (the earliest is ${earliest})` : ""}.`,
+          },
+          { status: 400 }
+        );
+      }
+      paymentCount = paymentCountInput;
+    } else {
+      // Keep the plan on file. A row with none, or whose first month
+      // has passed since it was saved, moves to the longest plan left.
+      paymentCount = Math.min(storedCount ?? openCount, openCount);
+    }
+
     const billingValues = derivePacketBillingValues({
       schoolYearTuition: schoolYear?.tuition ?? 0,
       schoolYearAnnualFees: schoolYear?.annual_fees ?? null,
@@ -206,23 +287,18 @@ export async function POST(req: NextRequest) {
       // An override keeps the fee the family signed against, so a
       // year-level fee change can't ride along with an unrelated edit.
       annualFee: isOverride ? storedAnnualFee : null,
+      paymentCount,
     });
 
     if (dryRun) {
       // `null` = couldn't tell (packet read failed). The dialog says
       // so rather than guessing either way.
-      let billingLive: boolean | null = null;
-      try {
-        const packet = await findPacket(studentId, yearId);
-        billingLive = Boolean(
-          liveStripeSubscriptionItemId(packet?.stripe_subscription_item_id)
-        );
-      } catch (err) {
-        console.error(
-          "[/api/admin/student-registration/by-student] dry-run packet read failed:",
-          err
-        );
-      }
+      const billingLive =
+        packet === undefined
+          ? null
+          : Boolean(
+              liveStripeSubscriptionItemId(packet?.stripe_subscription_item_id)
+            );
       return NextResponse.json({
         dryRun: true,
         isOverride,
@@ -231,6 +307,7 @@ export async function POST(req: NextRequest) {
           sufs_amount: before.sufsAmount,
           remaining_opportunity_amount: before.remainingTuition,
           annual_fee: before.annualFee,
+          payment_count: beforeCount,
           monthly_amount: before.monthly,
         },
         next: {
@@ -238,6 +315,7 @@ export async function POST(req: NextRequest) {
           remaining_opportunity_amount:
             billingValues.remaining_opportunity_amount,
           annual_fee: billingValues.annual_fee,
+          payment_count: billingValues.payment_count,
           monthly_amount: billingValues.monthly_amount,
         },
       } satisfies PerStudentBillingPreview);
@@ -290,11 +368,14 @@ export async function POST(req: NextRequest) {
     // old one. Alert staff so the drift gets fixed.
     let stripeSync: StripeSync = "not_started";
     try {
-      const packet = await findPacket(studentId, yearId);
+      // A packet read that failed above gets one more try here; if it
+      // fails again the catch reports the re-price as failed.
+      const syncPacket =
+        packet !== undefined ? packet : await findPacket(studentId, yearId);
       const live = Boolean(
-        liveStripeSubscriptionItemId(packet?.stripe_subscription_item_id)
+        liveStripeSubscriptionItemId(syncPacket?.stripe_subscription_item_id)
       );
-      await syncStripeForApplication(updatedApp, packet);
+      await syncStripeForApplication(updatedApp, syncPacket);
       if (live) stripeSync = "updated";
     } catch (err) {
       stripeSync = "failed";
@@ -330,6 +411,7 @@ export async function POST(req: NextRequest) {
         yearId,
         yearName: schoolYear?.year_name?.trim() || `Year #${yearId}`,
         before,
+        beforeCount,
         after: billingValues,
         stripeSync,
         stripeRetry,
@@ -385,6 +467,9 @@ export interface PerStudentBillingFigures {
   sufs_amount: number;
   remaining_opportunity_amount: number;
   annual_fee: number;
+  /** Monthly payments the yearly amount is spread over (12 for a row
+   *  saved before payment plans existed). */
+  payment_count: number;
   monthly_amount: number;
 }
 
@@ -479,6 +564,7 @@ async function writeOverrideNote({
   yearId,
   yearName,
   before,
+  beforeCount,
   after,
   stripeSync,
   stripeRetry,
@@ -490,6 +576,8 @@ async function writeOverrideNote({
   yearId: number;
   yearName: string;
   before: ReturnType<typeof resolveStudentReceiptAmounts>;
+  /** Payments the row billed over before this save. */
+  beforeCount: number;
   after: PacketBillingValues;
   stripeSync: StripeSync;
   stripeRetry: boolean;
@@ -509,6 +597,11 @@ async function writeOverrideNote({
   if (before.annualFee !== after.annual_fee) {
     changes.push(
       `Annual fee: ${usd(before.annualFee)} → ${usd(after.annual_fee)}`
+    );
+  }
+  if (beforeCount !== after.payment_count) {
+    changes.push(
+      `Monthly payments: ${beforeCount} → ${after.payment_count} (same yearly amount, spread over ${after.payment_count === 1 ? "1 payment" : `${after.payment_count} payments`})`
     );
   }
   const monthlyChanged = before.monthly !== after.monthly_amount;

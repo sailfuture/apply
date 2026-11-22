@@ -62,6 +62,7 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
+import { planSummaryLabel } from "@/lib/payment-plan";
 
 const SUFS_LABELS: Record<string, string> = {
   fes_eo_8: "FES-EO · Grade 8",
@@ -101,6 +102,10 @@ interface StudentRow {
    *  (not `subtotal / 12`) for the family's monthly figure so the
    *  receipt matches the invoice to the cent. */
   monthly: number;
+  /** Stored `payment_count`: how many monthly payments the subtotal
+   *  is spread over. Empty on a row saved before payment plans
+   *  existed (those run 12). */
+  paymentCount: number | null | undefined;
 }
 
 function formatCurrency(value: number): string {
@@ -234,6 +239,7 @@ export default function DashboardTuitionPage() {
         annual_fee?: number | null;
         remaining_opportunity_amount?: number | null;
         monthly_amount?: number | null;
+        payment_count?: number | null;
         confirmed_scholarship?: boolean;
       }[]
     ).filter((a) => a.registration_school_years_id === yearId);
@@ -298,6 +304,7 @@ export default function DashboardTuitionPage() {
         hasOSDetermination,
         subtotal,
         monthly: resolveStudentReceiptAmounts(app).monthly,
+        paymentCount: app.payment_count,
       });
     }
     return rows;
@@ -316,6 +323,14 @@ export default function DashboardTuitionPage() {
   // rounded amount, so two students at $41.67 are billed $83.34 and
   // the old division printed a cent less than the family owes.
   const monthlyTotal = sumStudentMonthly(studentRows);
+  // Which months the monthly figure runs: a family that started
+  // partway through the year pays the same yearly total over the
+  // months that were left, not over 12.
+  const planLabel = planSummaryLabel(
+    (schoolYear as { billing_start_date?: string | null } | null)
+      ?.billing_start_date,
+    studentRows.map((r) => r.paymentCount)
+  );
 
   const loading = !students || !applications || !yearsData;
 
@@ -594,7 +609,7 @@ export default function DashboardTuitionPage() {
                 </tr>
                 <tr className="border-t bg-white">
                   <td className="px-4 py-3 font-bold">
-                    Monthly Payment (Aug – Jul, 12 months)
+                    Monthly Payment ({planLabel})
                   </td>
                   <td className="px-4 py-3 text-right font-bold">
                     ${formatCurrency(monthlyTotal)}/mo

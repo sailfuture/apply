@@ -653,6 +653,14 @@ interface CreatePerStudentSubscriptionInput {
    *  and is invoiced immediately; enrolled after it → billing starts
    *  on the 1st of next month. */
   yearStartDate?: string | null;
+  /** When the first invoice goes out, decided by the caller from the
+   *  family's payment plan (`lib/payment-plan.ts`): "now" invoices on
+   *  creation (the enrollment month is the first payment); a
+   *  unix-seconds time defers it to that moment (a plan whose first
+   *  payment is a later month). Left out, the year-level rule built
+   *  from `billingStartDate` + `yearStartDate` decides, as it always
+   *  has. */
+  firstInvoice?: "now" | number;
   familyId: number;
   yearId: number;
   /** Defaults to 15 (SailFuture's standard net-15 terms). */
@@ -743,51 +751,97 @@ function firstOfNextMonthUnix(): number {
   );
 }
 
+/** How a new subscription's first invoice is timed. Both null =
+ *  invoice on creation. */
+interface FirstInvoiceTiming {
+  trialEndUnix: number | null;
+  cycleAnchorUnix: number | null;
+}
+
+const INVOICE_ON_CREATION: FirstInvoiceTiming = {
+  trialEndUnix: null,
+  cycleAnchorUnix: null,
+};
+
+/**
+ * The year-level first-invoice rule, used when the caller passes no
+ * `firstInvoice` of its own: a family whose students have been billed
+ * before (a restart after a cancel), where "invoice now" could charge
+ * a month they already paid. Regimes (the pivot for late enrollments
+ * is the FIRST DAY OF SCHOOL, not the billing date):
+ *   - billing start > 48h out  → `trial_end` (proven path; Stripe
+ *     requires trial_end comfortably in the future)
+ *   - billing start in the future but ≤ 48h → `billing_cycle_anchor`
+ *     + no proration. The old behavior silently DROPPED the anchor
+ *     here, invoicing the family immediately (up to 2 days early)
+ *     and anchoring all 12 invoices to the wrong day of month.
+ *   - billing start PASSED, but school hasn't started yet (or
+ *     starts today) → invoice IMMEDIATELY: the family is joining
+ *     for the current month and owes it. (Their later invoices ride
+ *     the enrollment day-of-month rather than the 1st — acceptable;
+ *     invoicing the current month is the priority.)
+ *   - billing start passed AND the first day of school has passed →
+ *     anchor to the FIRST OF NEXT MONTH, no proration.
+ *   - (billing start missing / unparsable → invoice now; there's no
+ *     year billing policy to align to.)
+ */
+function yearRuleFirstInvoiceTiming(
+  billingStartDate: string | null,
+  yearStartDate: string | null | undefined
+): FirstInvoiceTiming {
+  if (!billingStartDate) return INVOICE_ON_CREATION;
+  const ms = Date.parse(`${billingStartDate}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return INVOICE_ON_CREATION;
+  const unix = Math.floor(ms / 1000);
+  const nowUnix = Math.floor(Date.now() / 1000);
+  if (unix <= nowUnix) {
+    return schoolYearHasStarted(yearStartDate)
+      ? { trialEndUnix: null, cycleAnchorUnix: firstOfNextMonthUnix() }
+      : INVOICE_ON_CREATION;
+  }
+  if (unix <= nowUnix + 48 * 60 * 60) {
+    return { trialEndUnix: null, cycleAnchorUnix: unix };
+  }
+  return { trialEndUnix: unix, cycleAnchorUnix: null };
+}
+
+/** When (unix ms) the year-level rule would send a new subscription's
+ *  first invoice. The caller counts a student's payments from it. */
+export function yearRuleFirstInvoiceMs(
+  billingStartDate: string | null,
+  yearStartDate: string | null | undefined
+): number {
+  const timing = yearRuleFirstInvoiceTiming(billingStartDate, yearStartDate);
+  const unix = timing.trialEndUnix ?? timing.cycleAnchorUnix;
+  return unix ? unix * 1000 : Date.now();
+}
+
+/** Timing for a first invoice the caller scheduled for `atUnix`: the
+ *  same two mechanisms the year rule uses for a future billing start
+ *  (trial when comfortably out, cycle anchor inside 48h), and invoice
+ *  on creation once the moment has passed. */
+function scheduledFirstInvoiceTiming(atUnix: number): FirstInvoiceTiming {
+  const nowUnix = Math.floor(Date.now() / 1000);
+  if (atUnix <= nowUnix) return INVOICE_ON_CREATION;
+  if (atUnix <= nowUnix + 48 * 60 * 60) {
+    return { trialEndUnix: null, cycleAnchorUnix: atUnix };
+  }
+  return { trialEndUnix: atUnix, cycleAnchorUnix: null };
+}
+
 export async function createSubscriptionWithStudentItems(
   input: CreatePerStudentSubscriptionInput
 ): Promise<PerStudentSubscriptionResult> {
   const stripe = getStripeClient();
 
-  // First-invoice anchoring. Four regimes (the school's rule — the
-  // pivot for late enrollments is the FIRST DAY OF SCHOOL, not the
-  // billing date):
-  //   - billing start > 48h out  → `trial_end` (proven path; Stripe
-  //     requires trial_end comfortably in the future)
-  //   - billing start in the future but ≤ 48h → `billing_cycle_anchor`
-  //     + no proration. The old behavior silently DROPPED the anchor
-  //     here, invoicing the family immediately (up to 2 days early)
-  //     and anchoring all 12 invoices to the wrong day of month.
-  //   - billing start PASSED, but school hasn't started yet (or
-  //     starts today) → invoice IMMEDIATELY: the family is joining
-  //     for the current month and owes it. (Their later invoices ride
-  //     the enrollment day-of-month rather than the 1st — acceptable;
-  //     invoicing the current month is the priority.)
-  //   - billing start passed AND the first day of school has passed →
-  //     anchor to the FIRST OF NEXT MONTH, no proration. They joined
-  //     mid-term after the month's run, so they start with the next
-  //     month, aligned to the 1sts with everyone else.
-  //   - (billing start missing / unparsable → invoice now; there's no
-  //     year billing policy to align to.)
-  const { trialEndUnix, cycleAnchorUnix } = (() => {
-    if (!input.billingStartDate) {
-      return { trialEndUnix: null, cycleAnchorUnix: null };
-    }
-    const ms = Date.parse(`${input.billingStartDate}T00:00:00Z`);
-    if (!Number.isFinite(ms)) {
-      return { trialEndUnix: null, cycleAnchorUnix: null };
-    }
-    const unix = Math.floor(ms / 1000);
-    const nowUnix = Math.floor(Date.now() / 1000);
-    if (unix <= nowUnix) {
-      return schoolYearHasStarted(input.yearStartDate)
-        ? { trialEndUnix: null, cycleAnchorUnix: firstOfNextMonthUnix() }
-        : { trialEndUnix: null, cycleAnchorUnix: null };
-    }
-    if (unix <= nowUnix + 48 * 60 * 60) {
-      return { trialEndUnix: null, cycleAnchorUnix: unix };
-    }
-    return { trialEndUnix: unix, cycleAnchorUnix: null };
-  })();
+  // First-invoice timing. A caller working from a payment plan says
+  // when (`firstInvoice`); otherwise the year-level rule decides.
+  const { trialEndUnix, cycleAnchorUnix } =
+    input.firstInvoice === undefined
+      ? yearRuleFirstInvoiceTiming(input.billingStartDate, input.yearStartDate)
+      : input.firstInvoice === "now"
+        ? INVOICE_ON_CREATION
+        : scheduledFirstInvoiceTiming(input.firstInvoice);
 
   if (input.students.length === 0) {
     throw new Error(
