@@ -16,11 +16,13 @@ import {
   getDocumentDownloadUrl,
   getTemplateId,
   getTemplateRole,
+  pandaDocDate,
   schoolTodayIso,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
 import { formatDateUs } from "@/lib/us-date";
 import { formatUSPhone } from "@/lib/phone";
+import { lunchLetterPrefill } from "@/lib/lunch-letter-prefill";
 
 // The create chain does real PandaDoc work (create-from-template →
 // wait-for-draft → send → session). Give the function room so a slow
@@ -476,8 +478,13 @@ async function doCreate(
   // a miss just leaves the field for the parent to type.
   let parentPhone = "";
   let parentRelationship = "";
-  if (type === "withdrawal_form" || type === "liability_waiver") {
-    const signer = await xano.parents.findByClerkId(user.id).catch(() => null);
+  let signer: Awaited<ReturnType<typeof xano.parents.findByClerkId>> = null;
+  if (
+    type === "withdrawal_form" ||
+    type === "liability_waiver" ||
+    type === "lunch_letter"
+  ) {
+    signer = await xano.parents.findByClerkId(user.id).catch(() => null);
     parentPhone = formatUSPhone(signer?.phone);
     parentRelationship = signer?.relationship?.trim() ?? "";
   }
@@ -486,6 +493,7 @@ async function doCreate(
   // family has in this year rather than the one application the request
   // came in on. Best-effort: a failed lookup falls back to that student.
   let householdStudents = `${student.first_name} ${student.last_name}`;
+  let lunchLetterFields: Record<string, string> = {};
   if (type === "lunch_letter") {
     try {
       const [yearApps, familyStudents] = await Promise.all([
@@ -498,11 +506,22 @@ async function doCreate(
       const inYear = new Set(
         yearApps.map((a) => Number(a.registration_students_id))
       );
-      const names = familyStudents
-        .filter((s) => inYear.has(Number(s.id)))
+      const inYearStudents = familyStudents.filter((s) =>
+        inYear.has(Number(s.id))
+      );
+      const names = inYearStudents
         .map((s) => `${s.first_name} ${s.last_name}`.trim())
         .filter(Boolean);
       if (names.length > 0) householdStudents = names.join(", ");
+      // The signing adult's details only: the child grid is left for
+      // the parent to fill in.
+      lunchLetterFields = lunchLetterPrefill({
+        adult: signer ?? {
+          first_name: recipientFirstName,
+          last_name: recipientLastName,
+          email: recipientEmail,
+        },
+      });
     } catch (err) {
       console.error("[pandadoc/create] household student lookup failed:", err);
     }
@@ -571,7 +590,7 @@ async function doCreate(
       student_date_of_birth: studentDob,
       "student.date_of_birth": studentDob,
       student_date_of_birth_text: studentDob,
-      student_date_of_birth_iso: student.date_of_birth ?? "",
+      student_date_of_birth_iso: pandaDocDate(student.date_of_birth),
       parent_phone: parentPhone,
       // The Field ID the withdrawal template actually uses.
       parent_phone_number: parentPhone,
@@ -584,9 +603,12 @@ async function doCreate(
       // The enrollment agreement's "School Year" field beside the
       // signature ("2026-2027"), same value as the variable in its text.
       school_year: schoolYearName,
-      signature_date: todayIso,
+      signature_date: pandaDocDate(todayIso),
       // The participation agreement names its date fields `today_date`.
-      today_date: todayIso,
+      today_date: pandaDocDate(todayIso),
+      // Lunch letter only (empty for every other document): the child
+      // grid, the signing adult's address and contact details.
+      ...lunchLetterFields,
       signature_date_text: formatDateUs(todayIso),
     },
   });

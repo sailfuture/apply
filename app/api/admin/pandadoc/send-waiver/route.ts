@@ -8,6 +8,7 @@ import {
   getTemplateId,
   getTemplateRole,
   getWaiverCcRecipients,
+  pandaDocDate,
   schoolTodayIso,
   sendDocument,
   waitForDocumentStatus,
@@ -263,8 +264,8 @@ async function doSend(
       parent_relationship: primary?.relationship?.trim() ?? "",
       // Prefilled with the day it was sent; the parent can change it
       // when they sign on a later day.
-      today_date: schoolTodayIso(),
-      signature_date: schoolTodayIso(),
+      today_date: pandaDocDate(schoolTodayIso()),
+      signature_date: pandaDocDate(schoolTodayIso()),
       "parent.first_name": recipientFirstName,
       "parent.last_name": recipientLastName,
       "parent.full_name": parentName,

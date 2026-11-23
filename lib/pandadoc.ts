@@ -41,8 +41,11 @@ interface CreateDocumentParams {
   tokens?: Record<string, string>;
   /** Form-field prefills — populate interactive fields the signer
    *  would otherwise type into (e.g. "Participant Name", "Parent
-   *  Email"). Keyed by the field's `name` attribute in the PandaDoc
-   *  template; values are stringified. Distinct from tokens — a
+   *  Email"). Keyed by the field's MERGE FIELD name in the PandaDoc
+   *  template (field properties → "Merge Field"), NOT its Field ID:
+   *  a field whose merge field is unset is never filled, however its
+   *  Field ID is spelled (verified against the API, Nov 2026). Values
+   *  are stringified; empty ones are dropped. Distinct from tokens — a
    *  field's pre-filled value is editable by the signer in the
    *  signing UI, whereas tokens are baked into the doc text. */
   fields?: Record<string, string>;
@@ -109,12 +112,14 @@ export async function createDocumentFromTemplate(
   // optionally `role`, but role-binding the recipient already
   // covers that). Only emit the `fields` key when there's at least
   // one prefill to send — PandaDoc rejects empty `fields: {}`.
-  if (params.fields && Object.keys(params.fields).length > 0) {
+  // Empty values are dropped: they prefill nothing, and an empty
+  // string is not a valid value for a date field.
+  const prefills = Object.entries(params.fields ?? {}).filter(
+    ([, value]) => value !== ""
+  );
+  if (prefills.length > 0) {
     body.fields = Object.fromEntries(
-      Object.entries(params.fields).map(([name, value]) => [
-        name,
-        { value },
-      ])
+      prefills.map(([name, value]) => [name, { value }])
     );
   }
 
@@ -406,6 +411,17 @@ export function getTemplateRole(type: PandaDocTemplateType): string {
 /** Today's date at the school (Eastern) as YYYY-MM-DD, the form a
  *  PandaDoc date field takes. "en-CA" formats that way; pinning the zone
  *  keeps an evening signer off tomorrow's UTC date. */
+/**
+ * A calendar day ("YYYY-MM-DD") as the ISO 8601 timestamp PandaDoc's
+ * date fields take. Noon UTC rather than midnight, so the day reads the
+ * same in any US timezone. "" for anything that isn't a plain date, and
+ * empty prefills are dropped on send.
+ */
+export function pandaDocDate(day: string | null | undefined): string {
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec((day ?? "").trim());
+  return match ? `${match[1]}T12:00:00.000Z` : "";
+}
+
 export function schoolTodayIso(): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",

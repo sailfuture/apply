@@ -9,10 +9,12 @@ import {
   getTemplateId,
   getTemplateRole,
   getWaiverCcRecipients,
+  pandaDocDate,
   schoolTodayIso,
   sendDocument,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
+import { lunchLetterPrefill } from "@/lib/lunch-letter-prefill";
 
 /**
  * Admin-initiated free and reduced lunch letter send.
@@ -220,8 +222,10 @@ async function doSend(familyId: number, yearId: number): Promise<SendResult> {
       "family.name": family.family_name,
       student_names: studentNames,
       "students.names": studentNames,
-      today_date: schoolTodayIso(),
-      signature_date: schoolTodayIso(),
+      signature_date: pandaDocDate(schoolTodayIso()),
+      // The primary parent's address and contact details, and today's
+      // date. The child grid is left for the parent to fill in.
+      ...lunchLetterPrefill({ adult: primary }),
     },
   });
 
