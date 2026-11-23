@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useState, useRef, type ChangeEvent } from "react";
+import {
+  useMemo,
+  useState,
+  useRef,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
@@ -521,13 +527,14 @@ export default function EnrolledStudentDetailPage() {
         onChanged={() => mutate()}
       />
 
-      {/* Liability Waiver — its own card (lifted out of the packet's
-          Other Documents list) so admin can find + download the
-          signed waiver for this school year at a glance. Implicitly
-          year-scoped: the waiver state lives on the same per-year
-          packet the page is already scoped to. */}
-      <LiabilityWaiverCard
+      {/* Signed Documents — every PandaDoc document for this student
+          and school year (enrollment agreement, participation
+          agreement / liability waiver, lunch letter, withdrawal form)
+          with View / Download. Year-scoped: the packet and the
+          family's progress row are both this page's `yearId` rows. */}
+      <SignedDocumentsCard
         packet={packet}
+        familyDocuments={data.family_documents ?? null}
         student={student}
         schoolYear={school_year}
         primary={primary}
@@ -4085,208 +4092,357 @@ function formatWaiverStatus(status: string): string {
 }
 
 /**
- * Liability Waiver card — surfaces the per-year signed waiver PDF
- * with a prominent Download affordance. The waiver is a per-student,
- * per-year PandaDoc document whose id + status live on the packet
- * row, so this card is implicitly scoped to the page's `yearId`
- * (same scope as PacketCard). Three states:
- *   - Signed (`pandadoc id` + status "completed") → Download + View.
- *   - In progress (status "sent" / "viewed") → status + sent date,
- *     no download yet.
- *   - Not started / no packet → muted explainer.
- *
- * Download goes through the admin PandaDoc proxy
- * (`/api/admin/pandadoc/download`), NOT the raw `liability_waiver_pdf_url`
- * on the packet — that URL points at api.pandadoc.com and needs our
- * API key in the request header, which the admin browser doesn't
- * have. The proxy fetches server-side with the key and streams the
- * PDF back. The anchor's `download` attribute forces a save (rather
- * than the proxy's inline preview) and names the file with the
- * student + year so downloads across students/years don't collide —
- * the attribute wins over `Content-Disposition: inline` for same-
- * origin URLs, which this is.
+ * A PandaDoc timestamp (ISO string or epoch ms) → epoch ms, or null
+ * when unset. Xano stores 0 for an unset ms column.
  */
-function LiabilityWaiverCard({
+function docTimeMs(value: string | number | null | undefined): number | null {
+  if (value == null || value === "" || value === 0) return null;
+  const ms = typeof value === "number" ? value : new Date(value).getTime();
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/** File-name slug: spaces / the year's en-dash never leak into saves. */
+function docSlug(s: string): string {
+  return s
+    .trim()
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+type SignedDocState =
+  /** Signed in PandaDoc: a PDF to view / download. */
+  | { kind: "signed"; pandadocId: string }
+  /** Recorded as signed (admin override / paper copy), no PandaDoc PDF. */
+  | { kind: "signed-no-pdf" }
+  /** Sent / viewed: waiting on the family. */
+  | { kind: "pending"; status: string; sentAt: number | null }
+  /** Nothing started (or not required; see `label`). */
+  | { kind: "none"; label: string; detail: string };
+
+const NOT_STARTED: SignedDocState = {
+  kind: "none",
+  label: "Not started",
+  detail: "Not signed for this school year yet.",
+};
+
+/**
+ * Signed Documents card: every PandaDoc document that belongs to this
+ * student for the page's school year, in one place:
+ *   - Enrollment Agreement: family-level (progress row), or the
+ *     student's own when they were a mid-year sibling addition.
+ *   - Participation Agreement & Liability Waiver: per student, on the
+ *     packet. Keeps the admin send / resend + PandaDoc self-heal.
+ *   - Free & Reduced Lunch Letter: family-level (progress row).
+ *   - Public School Withdrawal Form: per student, on the packet; only
+ *     asked of Pinellas public-school transfers.
+ *
+ * Year-specific by construction: the packet and the progress row are
+ * both the rows for the page's `yearId`, so changing the page's year
+ * changes every document with it.
+ *
+ * Downloads go through the admin PandaDoc proxy
+ * (`/api/admin/pandadoc/download`): the stored `*_pdf_url` values point
+ * at api.pandadoc.com and need our API key. The anchor's `download`
+ * attribute names the save with document + student + year so files
+ * across students and years don't collide.
+ */
+function SignedDocumentsCard({
   packet,
+  familyDocuments,
   student,
   schoolYear,
   primary,
   onChanged,
 }: {
   packet: AdminEnrolledStudentResponse["packet"];
+  familyDocuments: AdminEnrolledStudentResponse["family_documents"];
   student: AdminEnrolledStudentResponse["student"];
   schoolYear: AdminEnrolledStudentResponse["school_year"];
-  /** Lowest-id parent — the address the waiver goes to. Display only;
+  /** Lowest-id parent: the address the waiver goes to. Display only;
    *  the send route resolves the recipient itself. */
   primary: AdminEnrolledStudentResponse["primary"];
   onChanged?: () => void | Promise<unknown>;
 }) {
   const yearName = schoolYear?.year_name ?? "";
-  const yearSuffix = yearName ? ` · ${yearName}` : "";
-
-  const pandadocId = packet?.liability_waiver_pandadoc_id ?? "";
-  const status = packet?.liability_waiver_status ?? "";
-  const sentAt = packet?.liability_waiver_sent_at ?? null;
-  // "completed" + a pandadoc id is the only state with a signed PDF
-  // to download. Same gate the list page + the old Other Documents
-  // row used, so every surface agrees on what "Signed" means.
-  const isSigned = !!pandadocId && status === "completed";
-
-  const downloadUrl = isSigned
-    ? `/api/admin/pandadoc/download?documentId=${pandadocId}`
-    : null;
-  // Filename: liability-waiver-<first>-<last>-<year>.pdf. Slug each
-  // piece so spaces / the year's en-dash don't leak into the saved
-  // name; drop empty pieces so a missing name doesn't leave a "--".
-  const slug = (s: string) =>
-    s
-      .trim()
-      .replace(/[^a-z0-9]+/gi, "-")
-      .replace(/^-+|-+$/g, "");
-  const downloadName =
+  const studentName =
+    `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim();
+  const fileName = (doc: string) =>
     [
-      "liability-waiver",
-      slug(student.first_name),
-      slug(student.last_name),
-      slug(yearName),
+      doc,
+      docSlug(student.first_name ?? ""),
+      docSlug(student.last_name ?? ""),
+      docSlug(yearName),
     ]
       .filter(Boolean)
       .join("-") + ".pdf";
 
-  // Admin send / resend. Offered in both unsigned states — a family
-  // whose registration was pushed through to enrollment without a
-  // waiver has usually stopped opening the portal, so the apply
-  // flow's embedded signing session will never be reached. PandaDoc
-  // emails them a link instead. Hidden once signed: there is nothing
-  // to chase, and re-sending would retire the signature's envelope.
-  const sendAction =
-    schoolYear?.id && student.id ? (
-      <div className="shrink-0">
+  // "void" is the cleared-envelope sentinel (Xano's PATCH can't blank
+  // a text column), not a state to show.
+  const clean = (status: string | null | undefined) =>
+    status && status !== "void" ? status : "";
+
+  // ---- Enrollment Agreement ----
+  // A mid-year addition signs their own agreement on the packet; every
+  // other student is covered by the family's on the progress row.
+  const additionId = packet?.addition_enrollment_agreement_pandadoc_id ?? "";
+  let enrollment: SignedDocState;
+  if (additionId) {
+    const status = clean(packet?.addition_enrollment_agreement_status);
+    enrollment =
+      status === "completed"
+        ? { kind: "signed", pandadocId: additionId }
+        : status
+          ? {
+              kind: "pending",
+              status,
+              sentAt: docTimeMs(packet?.addition_enrollment_agreement_sent_at),
+            }
+          : NOT_STARTED;
+  } else {
+    const id = familyDocuments?.enrollment_agreement_pandadoc_id ?? "";
+    const status = clean(familyDocuments?.enrollment_agreement_status);
+    enrollment =
+      id && status === "completed"
+        ? { kind: "signed", pandadocId: id }
+        : familyDocuments?.is_enrollment_agreement_signed
+          ? { kind: "signed-no-pdf" }
+          : status
+            ? {
+                kind: "pending",
+                status,
+                sentAt: docTimeMs(familyDocuments?.enrollment_agreement_sent),
+              }
+            : NOT_STARTED;
+  }
+
+  // ---- Participation Agreement & Liability Waiver ----
+  const waiverId = packet?.liability_waiver_pandadoc_id ?? "";
+  const waiverStatus = clean(packet?.liability_waiver_status);
+  const waiver: SignedDocState =
+    waiverId && waiverStatus === "completed"
+      ? { kind: "signed", pandadocId: waiverId }
+      : waiverStatus
+        ? {
+            kind: "pending",
+            status: waiverStatus,
+            sentAt: docTimeMs(packet?.liability_waiver_sent_at),
+          }
+        : packet
+          ? NOT_STARTED
+          : {
+              kind: "none",
+              label: "Not started",
+              detail:
+                "No registration packet for this year yet. Sending the waiver creates one.",
+            };
+
+  // ---- Free & Reduced Lunch Letter ----
+  const lunchId = familyDocuments?.lunch_letter_pandadoc_id ?? "";
+  const lunchStatus = clean(familyDocuments?.lunch_letter_status);
+  const lunch: SignedDocState =
+    lunchId && lunchStatus === "completed"
+      ? { kind: "signed", pandadocId: lunchId }
+      : familyDocuments?.is_lunch_letter_signed
+        ? { kind: "signed-no-pdf" }
+        : lunchStatus
+          ? {
+              kind: "pending",
+              status: lunchStatus,
+              sentAt: docTimeMs(familyDocuments?.lunch_letter_sent),
+            }
+          : NOT_STARTED;
+
+  // ---- Public School Withdrawal Form ----
+  const withdrawalId = packet?.withdrawal_form_pandadoc_id ?? "";
+  const withdrawalStatus = clean(packet?.withdrawal_form_status);
+  const withdrawal: SignedDocState =
+    withdrawalId && withdrawalStatus === "completed"
+      ? { kind: "signed", pandadocId: withdrawalId }
+      : withdrawalStatus
+        ? {
+            kind: "pending",
+            status: withdrawalStatus,
+            sentAt: docTimeMs(packet?.withdrawal_form_sent_at),
+          }
+        : packet?.transferring_from_pinellas_public
+          ? {
+              kind: "none",
+              label: "Not started",
+              detail:
+                "Transferring from a Pinellas public school; not signed yet.",
+            }
+          : {
+              kind: "none",
+              label: "Not required",
+              detail: "Only needed for transfers from a Pinellas public school.",
+            };
+
+  // Admin send / resend for the waiver, offered while unsigned. A family
+  // pushed through to enrollment without a waiver has usually stopped
+  // opening the portal, so PandaDoc emails them a link instead. Hidden
+  // once signed: re-sending would retire the signed envelope.
+  const waiverActions =
+    waiver.kind !== "signed" && schoolYear?.id && student.id ? (
+      <>
+        {/* Self-heal for the email path: PandaDoc is asked directly on
+            render, so a webhook that never landed can't leave a signed
+            waiver reading as "Sent". */}
+        {waiver.kind === "pending" ? (
+          <WaiverSignatureCheck
+            studentId={student.id}
+            yearId={schoolYear.id}
+            pandadocId={waiverId}
+            status={waiverStatus}
+            onChanged={onChanged}
+          />
+        ) : null}
         <SendLiabilityWaiverButton
           studentId={student.id}
           yearId={schoolYear.id}
-          studentName={
-            `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
-            "this student"
-          }
+          studentName={studentName || "this student"}
           recipientEmail={primary?.email ?? ""}
           recipientName={
             primary
               ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
               : undefined
           }
-          status={status}
+          status={waiverStatus}
           onSent={onChanged}
         />
-      </div>
+      </>
     ) : null;
+
+  const signedCount = [enrollment, waiver, lunch, withdrawal].filter(
+    (d) => d.kind === "signed" || d.kind === "signed-no-pdf"
+  ).length;
 
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-base">
-            Liability Waiver{yearSuffix}
+            Signed Documents{yearName ? ` · ${yearName}` : ""}
           </CardTitle>
-          {isSigned ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
-              <CheckCircle2 className="size-2.5" />
-              Signed
-            </span>
-          ) : status ? (
-            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
-              {formatWaiverStatus(status)}
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              Not started
-            </span>
-          )}
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {signedCount} signed
+          </span>
         </div>
       </CardHeader>
-      <CardContent className="py-5 bg-white">
-        {isSigned && downloadUrl ? (
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
-                <FileText className="size-4 text-muted-foreground" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">
-                  Signed liability waiver{yearName ? ` · ${yearName}` : ""}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Signed and on file for this school year.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Button asChild variant="outline" size="sm" className="bg-white">
-                <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
-                  View
-                  <ExternalLink className="size-3.5 ml-1.5" />
-                </a>
-              </Button>
-              <Button
-                asChild
-                size="sm"
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                <a href={downloadUrl} download={downloadName}>
-                  <Download className="size-3.5 mr-1.5" />
-                  Download PDF
-                </a>
-              </Button>
-            </div>
-          </div>
-        ) : status ? (
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="flex items-start gap-3 min-w-0">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
-                <FileText className="size-4 text-muted-foreground" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium">
-                  Waiver {formatWaiverStatus(status).toLowerCase()} — not
-                  signed yet
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {sentAt
-                    ? `Sent ${formatNoteTimestamp(new Date(sentAt).getTime())}. `
-                    : ""}
-                  The signed PDF will be available to download here once the
-                  family completes it.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {/* Self-heal for the email path: PandaDoc is asked
-                  directly on render, so a webhook that never landed
-                  can't leave a signed waiver reading as "Sent". */}
-              {schoolYear?.id ? (
-                <WaiverSignatureCheck
-                  studentId={student.id}
-                  yearId={schoolYear.id}
-                  pandadocId={pandadocId}
-                  status={status}
-                  onChanged={onChanged}
-                />
-              ) : null}
-              {sendAction}
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <p className="text-sm text-muted-foreground">
-              {packet
-                ? "The family hasn’t signed the liability waiver for this school year yet."
-                : "No registration packet on file for this student yet — sending the waiver will create one."}
-            </p>
-            {sendAction}
-          </div>
-        )}
+      <CardContent className="p-0 bg-white">
+        <ul className="divide-y">
+          <SignedDocRow
+            title="Enrollment Agreement"
+            scope={additionId ? "This student" : "Family"}
+            state={enrollment}
+            downloadName={fileName("enrollment-agreement")}
+          />
+          <SignedDocRow
+            title="Participation Agreement & Liability Waiver"
+            scope="This student"
+            state={waiver}
+            downloadName={fileName("participation-agreement")}
+            actions={waiverActions}
+          />
+          <SignedDocRow
+            title="Free & Reduced Lunch Letter"
+            scope="Family"
+            state={lunch}
+            downloadName={fileName("lunch-letter")}
+          />
+          <SignedDocRow
+            title="Public School Withdrawal Form"
+            scope="This student"
+            state={withdrawal}
+            downloadName={fileName("withdrawal-form")}
+          />
+        </ul>
       </CardContent>
     </Card>
+  );
+}
+
+function SignedDocRow({
+  title,
+  scope,
+  state,
+  downloadName,
+  actions,
+}: {
+  title: string;
+  /** "Family" (one per family per year) or "This student". */
+  scope: string;
+  state: SignedDocState;
+  downloadName: string;
+  /** Extra controls shown while the document is unsigned. */
+  actions?: ReactNode;
+}) {
+  const downloadUrl =
+    state.kind === "signed"
+      ? `/api/admin/pandadoc/download?documentId=${encodeURIComponent(state.pandadocId)}`
+      : null;
+
+  const badge =
+    state.kind === "signed" || state.kind === "signed-no-pdf" ? (
+      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+        <CheckCircle2 className="size-2.5" />
+        Signed
+      </span>
+    ) : state.kind === "pending" ? (
+      <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+        {formatWaiverStatus(state.status)}
+      </span>
+    ) : (
+      <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {state.label}
+      </span>
+    );
+
+  const detail =
+    state.kind === "signed"
+      ? "Signed in PandaDoc."
+      : state.kind === "signed-no-pdf"
+        ? "Marked signed by an admin. No PandaDoc PDF on file."
+        : state.kind === "pending"
+          ? `${state.sentAt ? `Sent ${formatNoteTimestamp(state.sentAt)}. ` : ""}Waiting on the family to sign.`
+          : state.detail;
+
+  return (
+    <li className="flex items-center justify-between gap-4 flex-wrap px-4 py-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
+          <FileText className="size-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-medium">{title}</p>
+            {badge}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {scope} · {detail}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {downloadUrl ? (
+          <>
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                View
+                <ExternalLink className="size-3.5 ml-1.5" />
+              </a>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <a href={downloadUrl} download={downloadName}>
+                <Download className="size-3.5 mr-1.5" />
+                Download
+              </a>
+            </Button>
+          </>
+        ) : (
+          actions
+        )}
+      </div>
+    </li>
   );
 }
 

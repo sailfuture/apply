@@ -7,6 +7,7 @@ import type {
   XanoParent,
   XanoStudent,
   XanoStudentRegistration,
+  XanoStudentRegistrationProgress,
   XanoSchoolYear,
 } from "@/lib/xano";
 
@@ -129,11 +130,20 @@ export async function GET(
     // the familyId until the app/family join lands. Best-effort:
     // an empty list on error so the page renders without the
     // emergency-contacts card.
-    const emergencyContacts = familyId
-      ? await xano.emergencyContacts
-          .getByFamilyId(familyId)
-          .catch(() => [])
-      : [];
+    //
+    // The family's registration-progress row for THIS year rides along
+    // in the same round trip: it holds the family-level signed documents
+    // (enrollment agreement, free & reduced lunch letter) that the
+    // Signed Documents card lists beside this student's own per-year
+    // documents on the packet.
+    const [emergencyContacts, progress] = familyId
+      ? await Promise.all([
+          xano.emergencyContacts.getByFamilyId(familyId).catch(() => []),
+          xano.studentRegistrationProgress
+            .getByFamilyAndYear(familyId, yearId)
+            .catch(() => null),
+        ])
+      : [[], null];
 
     return NextResponse.json({
       student: shapeStudent(student),
@@ -151,6 +161,7 @@ export async function GET(
       primary: primary ? shapeParent(primary) : null,
       parents: familyParents.map(shapeParent),
       emergency_contacts: emergencyContacts,
+      family_documents: shapeFamilyDocuments(progress),
       school_year: schoolYear
         ? {
             id: schoolYear.id,
@@ -371,6 +382,21 @@ function shapePacket(p: XanoStudentRegistration) {
     liability_waiver_status: p.liability_waiver_status ?? "",
     liability_waiver_sent_at: p.liability_waiver_sent_at ?? null,
     liability_waiver_pdf_url: p.liability_waiver_pdf_url ?? "",
+    // Public school withdrawal form, per student per year. Only asked
+    // of students transferring from a Pinellas public school.
+    transferring_from_pinellas_public:
+      p.transferring_from_pinellas_public === true,
+    withdrawal_form_pandadoc_id: p.withdrawal_form_pandadoc_id ?? "",
+    withdrawal_form_status: p.withdrawal_form_status ?? "",
+    withdrawal_form_sent_at: p.withdrawal_form_sent_at ?? null,
+    // Mid-year sibling additions sign their own enrollment agreement on
+    // the packet (the family's was signed before they existed).
+    addition_enrollment_agreement_pandadoc_id:
+      p.addition_enrollment_agreement_pandadoc_id ?? "",
+    addition_enrollment_agreement_status:
+      p.addition_enrollment_agreement_status ?? "",
+    addition_enrollment_agreement_sent_at:
+      p.addition_enrollment_agreement_sent_at ?? null,
     // Admin-only placement (grade + crew) and the crew-change audit
     // pair. Surfaced so the enrolled-detail Placement card can render
     // the current values + "previously Crew X · changed <date>".
@@ -378,6 +404,25 @@ function shapePacket(p: XanoStudentRegistration) {
     crew_assignment: p.crew_assignment ?? "",
     previous_crew_assignment: p.previous_crew_assignment ?? "",
     crew_assignment_change: p.crew_assignment_change ?? null,
+  };
+}
+
+/**
+ * Family-level signed documents for the page's school year, read off
+ * the family's registration-progress row (one per family per year).
+ * Null when the family has no progress row for the year yet.
+ */
+function shapeFamilyDocuments(p: XanoStudentRegistrationProgress | null) {
+  if (!p) return null;
+  return {
+    enrollment_agreement_pandadoc_id: p.enrollment_agreement_pandadoc_id ?? "",
+    enrollment_agreement_status: p.enrollment_agreement_status ?? "",
+    enrollment_agreement_sent: p.enrollment_agreement_sent ?? null,
+    is_enrollment_agreement_signed: p.is_enrollment_agreement_signed === true,
+    lunch_letter_pandadoc_id: p.lunch_letter_pandadoc_id ?? "",
+    lunch_letter_status: p.lunch_letter_status ?? "",
+    lunch_letter_sent: p.lunch_letter_sent ?? null,
+    is_lunch_letter_signed: p.isLunchLetter === true,
   };
 }
 
@@ -430,5 +475,9 @@ export interface AdminEnrolledStudentResponse {
    *  scoped — every family has a single set that any of their
    *  students' detail pages can render. */
   emergency_contacts: import("@/lib/xano").XanoEmergencyContact[];
+  /** Family-level signed documents (enrollment agreement, lunch letter)
+   *  for this school year. Null when the family has no
+   *  registration-progress row for the year. */
+  family_documents: ReturnType<typeof shapeFamilyDocuments>;
   school_year: { id: number; year_name: string } | null;
 }
