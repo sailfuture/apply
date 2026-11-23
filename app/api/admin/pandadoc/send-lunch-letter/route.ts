@@ -15,6 +15,7 @@ import {
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
 import { lunchLetterPrefill } from "@/lib/lunch-letter-prefill";
+import { loadLunchLetterHousehold } from "@/lib/lunch-letter-household";
 
 /**
  * Admin-initiated free and reduced lunch letter send.
@@ -97,12 +98,15 @@ async function doSend(familyId: number, yearId: number): Promise<SendResult> {
     return { status: 404, body: { error: "Family not found." } };
   }
 
-  const [progress, year, yearApps, familyStudents] = await Promise.all([
-    xano.studentRegistrationProgress.resolve(familyId, yearId),
-    xano.schoolYears.getById(yearId),
-    xano.applications.getByFamilyAndYear(familyId, yearId),
-    xano.students.getByFamilyId(familyId),
-  ]);
+  const [progress, year, yearApps, familyStudents, household] =
+    await Promise.all([
+      xano.studentRegistrationProgress.resolve(familyId, yearId),
+      xano.schoolYears.getById(yearId),
+      xano.applications.getByFamilyAndYear(familyId, yearId),
+      xano.students.getByFamilyId(familyId),
+      // The SNAP answer and income rows; never throws.
+      loadLunchLetterHousehold(familyId, yearId),
+    ]);
 
   // Already signed: the existing envelope IS the record.
   if (progress.isLunchLetter === true && progress.lunch_letter_pandadoc_id) {
@@ -183,6 +187,12 @@ async function doSend(familyId: number, yearId: number): Promise<SendResult> {
     .filter(Boolean)
     .join(", ");
   const firstStudent = studentsInYear[0] ?? null;
+  const gradeByStudent = new Map(
+    yearApps.map((a) => [
+      Number(a.registration_students_id),
+      a.current_grade ?? "",
+    ])
+  );
   const yearName = year?.year_name?.trim() ?? "";
 
   const doc = await createDocumentFromTemplate({
@@ -223,9 +233,17 @@ async function doSend(familyId: number, yearId: number): Promise<SendResult> {
       student_names: studentNames,
       "students.names": studentNames,
       signature_date: pandaDocDate(schoolTodayIso()),
-      // The primary parent's address and contact details, and today's
-      // date. The child grid is left for the parent to fill in.
-      ...lunchLetterPrefill({ adult: primary }),
+      // The child grid, the SNAP question, the primary parent's address
+      // and contact details, and today's date.
+      ...lunchLetterPrefill({
+        children: studentsInYear.map((s) => ({
+          first_name: s.first_name,
+          last_name: s.last_name,
+          grade: gradeByStudent.get(Number(s.id)) ?? "",
+        })),
+        household,
+        adult: primary,
+      }),
     },
   });
 

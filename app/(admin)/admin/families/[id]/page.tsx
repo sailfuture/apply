@@ -3411,6 +3411,85 @@ function ScholarshipEditableField({
   );
 }
 
+/**
+ * The SNAP / TANF / FDPIR case number on a SNAP-path scholarship. The
+ * parent types it beside the award letter upload; admin can enter or
+ * correct it here from the letter. It prefills the lunch letter. Saves
+ * on blur; an empty value isn't sent, because Xano drops empty strings
+ * and the old number would silently stay.
+ */
+function SnapCaseNumberField({
+  scholarshipId,
+  value,
+  onSaved,
+}: {
+  scholarshipId: number;
+  value: string;
+  onSaved: () => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [prevValue, setPrevValue] = useState(value);
+  const [saving, setSaving] = useState(false);
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setDraft(value);
+  }
+
+  async function save() {
+    const next = draft.replace(/\s+/g, "").toUpperCase();
+    if (next === "" || next === value) {
+      setDraft(value);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/scholarships/${scholarshipId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snap_case_number: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      // Keep the spinner until the refreshed row is on screen.
+      await onSaved();
+      toast.success("SNAP case number saved.");
+    } catch (err) {
+      console.error("[SnapCaseNumberField.save]", err);
+      setDraft(value);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Label htmlFor="admin-snap-case-number" className="text-sm font-medium">
+        SNAP case number
+      </Label>
+      <Input
+        id="admin-snap-case-number"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void save()}
+        disabled={saving}
+        maxLength={20}
+        autoComplete="off"
+        placeholder="Not entered"
+        className="h-8 w-48 bg-white"
+      />
+      {saving ? (
+        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+      ) : null}
+      <span className="text-xs text-muted-foreground">
+        Fills in the family&apos;s lunch letter.
+      </span>
+    </div>
+  );
+}
+
 function ScholarshipBlock({
   scholarship,
   familyId,
@@ -3651,6 +3730,16 @@ function ScholarshipBlock({
               : null}
           </span>
         </div>
+      ) : null}
+      {scholarship.isSNAPBenefits ? (
+        <SnapCaseNumberField
+          scholarshipId={scholarship.id}
+          value={scholarship.snap_case_number ?? ""}
+          onSaved={async () => {
+            await mutateDetails();
+            await onScholarshipChanged?.();
+          }}
+        />
       ) : null}
       {onFullForm ? (
         <div className="flex items-center justify-between gap-3 flex-wrap">

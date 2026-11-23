@@ -23,6 +23,7 @@ import {
 import { formatDateUs } from "@/lib/us-date";
 import { formatUSPhone } from "@/lib/phone";
 import { lunchLetterPrefill } from "@/lib/lunch-letter-prefill";
+import { loadLunchLetterHousehold } from "@/lib/lunch-letter-household";
 
 // The create chain does real PandaDoc work (create-from-template →
 // wait-for-draft → send → session). Give the function room so a slow
@@ -496,12 +497,17 @@ async function doCreate(
   let lunchLetterFields: Record<string, string> = {};
   if (type === "lunch_letter") {
     try {
-      const [yearApps, familyStudents] = await Promise.all([
+      const [yearApps, familyStudents, household] = await Promise.all([
         xano.applications.getByFamilyAndYear(
           familyId,
           application.registration_school_years_id
         ),
         xano.students.getByFamilyId(familyId),
+        // The SNAP answer and income rows; never throws.
+        loadLunchLetterHousehold(
+          familyId,
+          application.registration_school_years_id
+        ),
       ]);
       const inYear = new Set(
         yearApps.map((a) => Number(a.registration_students_id))
@@ -513,9 +519,21 @@ async function doCreate(
         .map((s) => `${s.first_name} ${s.last_name}`.trim())
         .filter(Boolean);
       if (names.length > 0) householdStudents = names.join(", ");
-      // The signing adult's details only: the child grid is left for
-      // the parent to fill in.
+      // One row of the form's child grid per student, with the grade
+      // they're entering this year.
+      const gradeByStudent = new Map(
+        yearApps.map((a) => [
+          Number(a.registration_students_id),
+          a.current_grade ?? "",
+        ])
+      );
       lunchLetterFields = lunchLetterPrefill({
+        children: inYearStudents.map((s) => ({
+          first_name: s.first_name,
+          last_name: s.last_name,
+          grade: gradeByStudent.get(Number(s.id)) ?? "",
+        })),
+        household,
         adult: signer ?? {
           first_name: recipientFirstName,
           last_name: recipientLastName,
@@ -565,6 +583,8 @@ async function doCreate(
       parent_full_name: `${recipientFirstName} ${recipientLastName}`.trim(),
       parent_name: `${recipientFirstName} ${recipientLastName}`.trim(),
       parent_email: recipientEmail,
+      // The name the withdrawal template uses.
+      parent_email_address: recipientEmail,
       "parent.first_name": recipientFirstName,
       "parent.last_name": recipientLastName,
       "parent.full_name": `${recipientFirstName} ${recipientLastName}`.trim(),
@@ -584,10 +604,10 @@ async function doCreate(
       "family.name": family.family_name,
       student_names: householdStudents,
       "students.names": householdStudents,
-      // The withdrawal template's date of birth is a TEXT field, so the
-      // plain key carries MM/DD/YYYY. A PandaDoc DATE field needs the
-      // ISO form the student row stores: use the `_iso` key for one.
-      student_date_of_birth: studentDob,
+      // The withdrawal template's date of birth is a DATE field, which
+      // takes the ISO form. The `_text` key carries MM/DD/YYYY for a
+      // template that uses a text box instead.
+      student_date_of_birth: pandaDocDate(student.date_of_birth),
       "student.date_of_birth": studentDob,
       student_date_of_birth_text: studentDob,
       student_date_of_birth_iso: pandaDocDate(student.date_of_birth),

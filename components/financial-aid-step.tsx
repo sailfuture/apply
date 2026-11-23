@@ -151,6 +151,7 @@ interface Scholarship {
   family_contribution_per_month: number | null;
   scholarship_advocacy_letter: string;
   snap_benefits: Record<string, unknown>[];
+  snap_case_number?: string | null;
   other_benefits: Record<string, unknown>[];
   signature: Record<string, unknown> | null;
   full_name_signature?: string | null;
@@ -276,6 +277,8 @@ interface ScholarshipOnScreen {
   signatureUrl: string | null;
   choice: "none" | "snap" | "full" | null;
   snapBenefitsFiles: Record<string, unknown>[];
+  /** SNAP case number, for the lunch letter. Saved on blur by itself. */
+  snapCaseNumber: string;
   otherBenefitsFiles: Record<string, unknown>[];
 }
 
@@ -317,6 +320,7 @@ const NO_SCHOLARSHIP: ScholarshipOnScreen = {
   signatureUrl: null,
   choice: null,
   snapBenefitsFiles: [],
+  snapCaseNumber: "",
   otherBenefitsFiles: [],
 };
 
@@ -414,6 +418,8 @@ function readScholarshipRecord(
       Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0
         ? s.snap_benefits
         : [],
+    snapCaseNumber:
+      typeof s.snap_case_number === "string" ? s.snap_case_number : "",
     otherBenefitsFiles:
       Array.isArray(s.other_benefits) && s.other_benefits.length > 0
         ? s.other_benefits
@@ -850,6 +856,7 @@ export function FinancialAidStep({
   const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(opened.signatureUrl);
   const [signatureUploading, setSignatureUploading] = useState(false);
   const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>(opened.snapBenefitsFiles);
+  const [snapCaseNumber, setSnapCaseNumber] = useState(opened.snapCaseNumber);
   const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>(opened.otherBenefitsFiles);
   const [unemploymentLetter, setUnemploymentLetter] = useState<Record<string, unknown>[]>(opened.form.unemploymentLetter);
   // Prior-year federal tax return — required on the Opportunity
@@ -1187,6 +1194,36 @@ export function FinancialAidStep({
     );
   }
 
+  // SNAP case number: saved when the parent leaves the field. An empty
+  // value isn't sent (Xano drops empty strings, so it would look saved
+  // while the old number stayed); the field snaps back instead.
+  async function saveSnapCaseNumber(raw: string) {
+    const next = raw.replace(/\s+/g, "").toUpperCase();
+    if (next === "" || next === snapCaseNumber) return;
+    const previous = snapCaseNumber;
+    setSnapCaseNumber(next);
+    try {
+      const sid = scholarship?.id ?? (await ensureScholarship());
+      if (!sid) throw new Error("No scholarship row");
+      await trackAutosave(
+        fetch(`/api/scholarship/${sid}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ snap_case_number: next }),
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(`Save failed (${res.status})`);
+          return res;
+        })
+      );
+      mutate(`/api/scholarship/${sid}`);
+      if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
+    } catch (err) {
+      console.error("Failed to save SNAP case number:", err);
+      setSnapCaseNumber(previous);
+      toast.error("Couldn't save the case number. Please try again.");
+    }
+  }
+
   // Persists on blur — cheap PATCH when the user leaves the field.
   async function handleSufsAwardIdBlur(appId: number) {
     const app = sufsApplications.find((a) => a.id === appId);
@@ -1276,6 +1313,8 @@ export function FinancialAidStep({
     if (take("benefits")) setBenefits(v.benefits);
     if (take("scholarshipChoice")) setScholarshipChoice(loaded.choice);
     if (take("snapBenefitsFiles")) setSnapBenefitsFiles(loaded.snapBenefitsFiles);
+    // Saved on its own as the parent leaves the field, not with the form.
+    setSnapCaseNumber(loaded.snapCaseNumber);
     // Nothing on this step changes these; the server's copy always wins.
     setOtherBenefitsFiles(loaded.otherBenefitsFiles);
   }
@@ -2781,6 +2820,32 @@ export function FinancialAidStep({
                     }
                   }}
                 />
+              </div>
+
+              {/* Optional: only SNAP / TANF / FDPIR families have one. */}
+              <div className="space-y-1.5">
+                <Label htmlFor="snap-case-number" className="text-sm font-medium">
+                  SNAP Case Number{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (optional)
+                  </span>
+                </Label>
+                <LocalInput
+                  id="snap-case-number"
+                  value={snapCaseNumber}
+                  onBlurSave={(val) => void saveSnapCaseNumber(val)}
+                  disabled={isReadonly}
+                  maxLength={20}
+                  autoComplete="off"
+                  placeholder="10 letters and numbers"
+                  className="max-w-xs bg-white"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Printed on your Notice of Case Action. This is not your EBT
+                  card number. We use it to fill in your free and reduced
+                  lunch letter, so you won&apos;t have to list your income
+                  there.
+                </p>
               </div>
 
               {/* What Documents Can I Upload? */}

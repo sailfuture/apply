@@ -47,6 +47,7 @@ const PARENT_FIELD_ALLOWLIST = [
   "family_contribution_per_month",
   // Uploaded documents
   "snap_benefits",
+  "snap_case_number",
   "other_benefits",
   "unemployment_letter",
   "tax_return",

@@ -1190,6 +1190,11 @@ export interface XanoScholarship {
   debts_personal_loans: number | null;
   government_benefits: boolean;
   snap_benefits: Record<string, unknown>[];
+  /** SNAP / TANF / FDPIR case number, typed by the parent beside the
+   *  award letter upload (optional: a family that uploads a meal status
+   *  letter instead has none). Prefills the lunch letter. Xano drops an
+   *  empty string on PATCH, so it can be changed but not blanked. */
+  snap_case_number?: string | null;
   /** Admin verification trail for the SNAP award letter. Same pattern
    *  as the contributing-member `*_confirm` columns: the bool flips
    *  when admin marks the document reviewed; the audit timestamp +

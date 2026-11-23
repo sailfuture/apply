@@ -122,6 +122,7 @@ export async function PATCH(
       // which the client splices into the existing array before
       // PATCHing.
       "snap_benefits",
+      "snap_case_number",
       "unemployment_letter",
       "tax_return",
       // Parent-entered financial data — admin can correct/override it
