@@ -17,10 +17,11 @@ import {
 } from "@/lib/per-student-billing";
 import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
 import {
+  FULL_YEAR_PAYMENTS,
   paymentsFrom,
-  planFirstMonthLabel,
   resolvedPaymentCount,
   storedPaymentCount,
+  tuitionMonthsOf,
 } from "@/lib/payment-plan";
 
 /**
@@ -37,7 +38,8 @@ import {
  *     yearId: number,
  *     sufsAwardAmount?: number,
  *     remainingOpportunityAmount?: number,
- *     paymentCount?: number,     // monthly payments (1–12), see below
+ *     tuitionMonths?: number,    // enrollment start month, as months of
+ *                                // tuition (1–12; January = 7), see below
  *     dryRun?: boolean,
  *     reason?: string,
  *     notifyParents?: boolean,   // email the new monthly once Stripe has it
@@ -55,13 +57,16 @@ import {
  * billing is live we still re-price the Stripe item to match the
  * new amount.
  *
- * Payment plan. The family-paid total is never prorated for a late
- * start; it is spread over the payments left in the billing year
- * (`lib/payment-plan.ts`). `paymentCount` picks the plan, i.e. the
- * month of the first payment. Left out, the row keeps its plan, or
- * gets the longest one still possible ("first payment this month")
- * when it has none or its first month has passed. Once the student
- * has been billed the plan is in motion and can't be changed here.
+ * Start month and payment plan (`lib/payment-plan.ts`). A student is
+ * charged tuition for the months they attend: `tuitionMonths` is the
+ * month they start, counted through the end of the billing year, and
+ * sets `tuition_total` (January = 7/12 of the year's tuition). What
+ * the family pays is still the amount admin types; it is spread over
+ * the payments from the start month, or from now if that has passed,
+ * through the year's last month. Left out, the row keeps its start
+ * month (a new one starts from the parent's chosen start term, else
+ * this month). Once the student has been billed neither can be
+ * changed here.
  *
  * Amount overrides. Once a student's award is confirmed and amounts
  * are on file, the Determination card locks the dollar inputs — the
@@ -162,16 +167,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const hasPaymentCount = Object.prototype.hasOwnProperty.call(
+    // The enrollment start month, as months of tuition (January = 7).
+    // `paymentCount` is the name the card sent before the start month
+    // drove tuition as well; a browser tab still running that card
+    // means the same thing by it.
+    const startMonthRaw = Object.prototype.hasOwnProperty.call(
       body,
-      "paymentCount"
-    );
-    const paymentCountInput = hasPaymentCount
-      ? storedPaymentCount(Number(body.paymentCount))
-      : null;
-    if (hasPaymentCount && paymentCountInput == null) {
+      "tuitionMonths"
+    )
+      ? body.tuitionMonths
+      : Object.prototype.hasOwnProperty.call(body, "paymentCount")
+        ? body.paymentCount
+        : undefined;
+    const startMonthInput =
+      startMonthRaw === undefined
+        ? null
+        : storedPaymentCount(Number(startMonthRaw));
+    if (startMonthRaw !== undefined && startMonthInput == null) {
       return NextResponse.json(
-        { error: "paymentCount must be a whole number from 1 to 12" },
+        { error: "tuitionMonths must be a whole number from 1 to 12" },
         { status: 400 }
       );
     }
@@ -238,45 +252,71 @@ export async function POST(req: NextRequest) {
     }
     const everBilled = Boolean(packet?.stripe_subscription_item_id);
 
-    // Payment plan. `openCount` is the longest plan still possible:
-    // a first payment this month.
+    // ─── Start month and payment plan ───
+    // The month the student STARTS sets how many months of tuition
+    // they are charged (January = 7 of 12). It is not the month the
+    // family registers, and it can be in the past (already attending)
+    // or ahead (enrolling now for January). The payments then run from
+    // that month, or from now if it has passed, through the year's last
+    // month. `openCount` is the longest plan still possible: a first
+    // payment this month.
+    const yearTuition = schoolYear?.tuition ?? 0;
     const storedCount = storedPaymentCount(app.payment_count);
     const beforeCount = resolvedPaymentCount(app.payment_count);
     const billingStartDate = schoolYear?.billing_start_date ?? null;
     const openCount = paymentsFrom(billingStartDate, Date.now());
+    // Months of tuition the row already charges. Null when no tuition
+    // figure is saved yet (a brand-new determination). A row saved
+    // before proration existed holds the full year, so it reads as 12
+    // and stays there unless a start month is picked.
+    const storedMonths =
+      typeof app.tuition_total === "number" && app.tuition_total > 0
+        ? tuitionMonthsOf(app.tuition_total, yearTuition)
+        : null;
+    const beforeMonths = storedMonths ?? FULL_YEAR_PAYMENTS;
+    const beforeTuition =
+      typeof app.tuition_total === "number" && app.tuition_total > 0
+        ? app.tuition_total
+        : yearTuition;
+    let tuitionMonths: number;
     let paymentCount: number;
     if (packet === undefined || everBilled) {
-      // In motion (or unknown): the count the row already bills over.
+      // In motion (or unknown): what the row already charges and bills.
+      tuitionMonths = beforeMonths;
       paymentCount = beforeCount;
-      if (paymentCountInput != null && paymentCountInput !== paymentCount) {
+      if (startMonthInput != null && startMonthInput !== tuitionMonths) {
         return NextResponse.json(
           {
             error: everBilled
-              ? "Monthly billing has already started for this student, so the number of payments can't be changed here."
+              ? "Monthly billing has already started for this student, so the enrollment start month can't be changed here."
               : "Couldn't check whether billing has started for this student. Try again in a moment.",
           },
           { status: everBilled ? 409 : 503 }
         );
       }
-    } else if (paymentCountInput != null) {
-      if (paymentCountInput > openCount) {
-        const earliest = planFirstMonthLabel(billingStartDate, openCount);
-        return NextResponse.json(
-          {
-            error: `The first payment can't be in a month that has already passed${earliest ? ` (the earliest is ${earliest})` : ""}.`,
-          },
-          { status: 400 }
-        );
-      }
-      paymentCount = paymentCountInput;
+    } else if (startMonthInput != null) {
+      tuitionMonths = startMonthInput;
+      paymentCount = Math.min(tuitionMonths, openCount);
     } else {
-      // Keep the plan on file. A row with none, or whose first month
-      // has passed since it was saved, moves to the longest plan left.
-      paymentCount = Math.min(storedCount ?? openCount, openCount);
+      // No start month sent: keep the one on file. A brand-new
+      // determination starts from the term the parent said the student
+      // would start in, or this month when they picked none.
+      tuitionMonths =
+        storedMonths ??
+        (await defaultStartMonths(app, yearId, billingStartDate, openCount));
+      // The plan on file, never longer than the months of tuition or
+      // the months left: a first payment month that has passed since
+      // the row was saved moves to the longest plan left.
+      paymentCount = Math.min(
+        storedCount ?? tuitionMonths,
+        tuitionMonths,
+        openCount
+      );
     }
 
     const billingValues = derivePacketBillingValues({
-      schoolYearTuition: schoolYear?.tuition ?? 0,
+      schoolYearTuition: yearTuition,
+      tuitionMonths,
       schoolYearAnnualFees: schoolYear?.annual_fees ?? null,
       sufsAwardAmount,
       remainingOpportunityAmount,
@@ -304,6 +344,7 @@ export async function POST(req: NextRequest) {
         isOverride,
         billingLive,
         current: {
+          tuition_total: beforeTuition,
           sufs_amount: before.sufsAmount,
           remaining_opportunity_amount: before.remainingTuition,
           annual_fee: before.annualFee,
@@ -311,6 +352,7 @@ export async function POST(req: NextRequest) {
           monthly_amount: before.monthly,
         },
         next: {
+          tuition_total: billingValues.tuition_total,
           sufs_amount: billingValues.sufs_amount,
           remaining_opportunity_amount:
             billingValues.remaining_opportunity_amount,
@@ -412,6 +454,7 @@ export async function POST(req: NextRequest) {
         yearName: schoolYear?.year_name?.trim() || `Year #${yearId}`,
         before,
         beforeCount,
+        beforeTuition,
         after: billingValues,
         stripeSync,
         stripeRetry,
@@ -464,6 +507,9 @@ export interface PerStudentBillingPreview {
 }
 
 export interface PerStudentBillingFigures {
+  /** The student's tuition for the year: the year's tuition, or the
+   *  share of it for the months they attend. */
+  tuition_total: number;
   sufs_amount: number;
   remaining_opportunity_amount: number;
   annual_fee: number;
@@ -526,6 +572,39 @@ async function emailParentsAboutNewMonthly({
   return result.ok;
 }
 
+/**
+ * Months of tuition a brand-new determination starts from, before
+ * anyone has picked a start month: the term the parent said the
+ * student would start in (the Students step asks, for the current
+ * school year), counted from that term's first day through the end of
+ * the billing year. With no term on the application, or one without a
+ * date, it is `fallback` — a start this month.
+ */
+async function defaultStartMonths(
+  app: XanoApplication,
+  yearId: number,
+  billingStartDate: string | null,
+  fallback: number
+): Promise<number> {
+  const termId = Number(app.registration_academic_terms_id);
+  if (!Number.isFinite(termId) || termId <= 0) return fallback;
+  try {
+    const terms = await xano.academicTerms.getByYear(yearId);
+    const start = terms.find((t) => t.id === termId)?.start_date;
+    // Noon UTC, so the date can't slip a day either side of midnight.
+    const startMs = start ? Date.parse(`${start}T12:00:00Z`) : Number.NaN;
+    return Number.isFinite(startMs)
+      ? paymentsFrom(billingStartDate, startMs)
+      : fallback;
+  } catch (err) {
+    console.error(
+      "[/api/admin/student-registration/by-student] start-term lookup failed:",
+      err
+    );
+    return fallback;
+  }
+}
+
 async function findPacket(studentId: number, yearId: number) {
   const yearPackets = await xano.studentRegistration.getByYear(yearId);
   return (
@@ -565,6 +644,7 @@ async function writeOverrideNote({
   yearName,
   before,
   beforeCount,
+  beforeTuition,
   after,
   stripeSync,
   stripeRetry,
@@ -578,12 +658,19 @@ async function writeOverrideNote({
   before: ReturnType<typeof resolveStudentReceiptAmounts>;
   /** Payments the row billed over before this save. */
   beforeCount: number;
+  /** The student's tuition for the year before this save. */
+  beforeTuition: number;
   after: PacketBillingValues;
   stripeSync: StripeSync;
   stripeRetry: boolean;
   reason: string;
 }): Promise<boolean | null> {
   const changes: string[] = [];
+  if (Math.abs(beforeTuition - after.tuition_total) > 0.005) {
+    changes.push(
+      `Tuition for the year (enrollment start month changed): ${usd(beforeTuition)} → ${usd(after.tuition_total)}`
+    );
+  }
   if (before.remainingTuition !== after.remaining_opportunity_amount) {
     changes.push(
       `Remaining amount family pays: ${usd(before.remainingTuition)} → ${usd(after.remaining_opportunity_amount)}`

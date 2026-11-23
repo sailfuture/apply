@@ -118,6 +118,106 @@ export function planFirstSlotStartMs(
   return slot ? slot.periodStart : null;
 }
 
+/* ─────────────── Tuition for a student who starts mid-year ───────────────
+ *
+ * A student is charged tuition for the months they attend: the month
+ * they START through the end of the billing year. A January start is 7
+ * of 12 months, so 7/12 of the year's tuition. (The annual fee is not
+ * prorated.)
+ *
+ * The start month is not the month the family registers — a family can
+ * enroll in November for a January start — and it is not the number of
+ * payments either: a student who started in November but whose billing
+ * begins in December still owes 9 months of tuition, in 8 payments. So
+ * the months of tuition live on the row as the prorated figure itself,
+ * `registration_application.tuition_total`, and are read back from its
+ * ratio to the year's tuition. `payment_count` only ever says how many
+ * payments that amount is spread over.
+ */
+
+/** Tuition for `months` of the 12-month year, to the cent. Anything
+ *  that isn't a whole number of months from 1 to 12 is a full year. */
+export function proratedTuition(yearTuition: number, months: unknown): number {
+  const count = resolvedPaymentCount(months);
+  if (count >= FULL_YEAR_PAYMENTS) return yearTuition;
+  return Math.round(((yearTuition * count) / FULL_YEAR_PAYMENTS) * 100) / 100;
+}
+
+/**
+ * How many months of tuition a stored `tuition_total` stands for, out
+ * of the year's tuition: 16,054.50 of 27,522 is 7. A row with nothing
+ * stored, or saved before proration existed (it holds the full year),
+ * reads as 12.
+ */
+export function tuitionMonthsOf(
+  tuitionTotal: unknown,
+  yearTuition: unknown
+): number {
+  if (
+    typeof tuitionTotal !== "number" ||
+    typeof yearTuition !== "number" ||
+    !Number.isFinite(tuitionTotal) ||
+    !Number.isFinite(yearTuition) ||
+    tuitionTotal <= 0 ||
+    yearTuition <= 0
+  ) {
+    return FULL_YEAR_PAYMENTS;
+  }
+  const months = Math.round((tuitionTotal / yearTuition) * FULL_YEAR_PAYMENTS);
+  return Math.min(Math.max(months, 1), FULL_YEAR_PAYMENTS);
+}
+
+/** The receipt's tuition line: "Annual Tuition" for a full year,
+ *  "Tuition (Jan – Jul, 7 of 12 months)" for a mid-year start. */
+export function tuitionLineLabel(
+  billingStartDate: string | null | undefined,
+  months: number
+): string {
+  if (months >= FULL_YEAR_PAYMENTS) return "Annual Tuition";
+  const range = planRangeLabel(billingStartDate, months);
+  const of12 = `${months} of ${FULL_YEAR_PAYMENTS} months`;
+  return range ? `Tuition (${range}, ${of12})` : `Tuition (${of12})`;
+}
+
+/**
+ * The tuition line of one student's receipt: the stored
+ * `tuition_total` (what their determination charged), how many months
+ * it stands for, and the label to print beside it. A row with nothing
+ * stored shows the year's tuition, as every receipt did before
+ * proration existed.
+ */
+export function studentTuitionLine(
+  app: { tuition_total?: number | null },
+  yearTuition: number,
+  billingStartDate: string | null | undefined
+): { tuition: number; months: number; label: string } {
+  const stored = app.tuition_total;
+  const tuition =
+    typeof stored === "number" && Number.isFinite(stored) && stored > 0
+      ? stored
+      : yearTuition;
+  const months = tuitionMonthsOf(tuition, yearTuition);
+  return { tuition, months, label: tuitionLineLabel(billingStartDate, months) };
+}
+
+/**
+ * Every month a student can start in, first month of the billing year
+ * first: August (12 months) down to July (1). Unlike a first payment,
+ * a start month can be in the past — the student is already attending.
+ * Empty with no billing start date.
+ */
+export function startMonthOptions(
+  billingStartDate: string | null | undefined
+): PaymentPlanOption[] {
+  if (!hasBillingStart(billingStartDate)) return [];
+  const options: PaymentPlanOption[] = [];
+  for (let count = FULL_YEAR_PAYMENTS; count >= 1; count -= 1) {
+    const label = planFirstMonthLabel(billingStartDate, count);
+    if (label) options.push({ count, firstMonthLabel: label });
+  }
+  return options;
+}
+
 /** The monthly payment for a yearly amount spread over `count`
  *  payments, rounded to cents the way every stored figure is. */
 export function monthlyForPlan(annualTotal: number, count: number): number {

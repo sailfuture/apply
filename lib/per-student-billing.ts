@@ -15,7 +15,11 @@ import {
   isMidYearAddition,
   isPendingMidYearAddition,
 } from "@/lib/midyear-additions";
-import { monthlyForPlan, resolvedPaymentCount } from "@/lib/payment-plan";
+import {
+  monthlyForPlan,
+  proratedTuition,
+  resolvedPaymentCount,
+} from "@/lib/payment-plan";
 
 /**
  * Last-resort fallback for the per-student annual fee when the
@@ -40,7 +44,11 @@ export const FALLBACK_PER_STUDENT_ANNUAL_FEE = 500;
  * — the Stripe-side link — not any of the math columns.
  *
  * Column meanings (on the application row):
- *   - `tuition_total`              — school year's gross tuition.
+ *   - `tuition_total`              — this student's tuition for the
+ *                                    year: the school year's tuition,
+ *                                    or the share of it for the months
+ *                                    they attend when they start
+ *                                    mid-year (January = 7/12).
  *   - `sufs_amount`                — SUFS award (tier amount).
  *   - `remaining_opportunity_amount` — what the family pays toward
  *                                    tuition via the Opportunity
@@ -89,6 +97,7 @@ export function derivePacketBillingValues({
   remainingOpportunityAmount,
   annualFee,
   paymentCount,
+  tuitionMonths,
 }: {
   schoolYearTuition: number;
   /** Per-student annual fee for the school year, sourced from
@@ -110,6 +119,11 @@ export function derivePacketBillingValues({
   /** Monthly payments the family-paid total is spread over. Anything
    *  that isn't a whole number from 1 to 12 reads as a full year. */
   paymentCount?: number | null;
+  /** Months of tuition the student is charged: the month they start
+   *  through the end of the billing year (a January start is 7).
+   *  Anything else reads as a full year. Separate from `paymentCount`
+   *  on purpose — see `lib/payment-plan.ts`. */
+  tuitionMonths?: number | null;
 }): PacketBillingValues {
   const sufs = Number.isFinite(sufsAwardAmount) ? sufsAwardAmount : 0;
   const remaining = Number.isFinite(remainingOpportunityAmount)
@@ -128,10 +142,16 @@ export function derivePacketBillingValues({
           Number.isFinite(schoolYearAnnualFees)
         ? schoolYearAnnualFees
         : FALLBACK_PER_STUDENT_ANNUAL_FEE;
-  const tuition = Number.isFinite(schoolYearTuition) ? schoolYearTuition : 0;
+  // Tuition for the months the student attends: the year's tuition for
+  // a full year, 7/12 of it for a January start. The fee above is not
+  // prorated.
+  const tuition = proratedTuition(
+    Number.isFinite(schoolYearTuition) ? schoolYearTuition : 0,
+    tuitionMonths
+  );
 
-  // `tuition_total` is the year's gross tuition. SUFS + Opportunity
-  // Scholarship cover the rest; the family pays
+  // `tuition_total` is this student's tuition for the year. SUFS +
+  // Opportunity Scholarship cover the rest; the family pays
   // `remaining_opportunity_amount + annual_fee` per year.
   const tuition_total = tuition;
   const opportunity_award_amount = Math.max(

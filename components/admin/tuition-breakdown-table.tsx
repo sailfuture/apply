@@ -11,7 +11,7 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
-import { planSummaryLabel } from "@/lib/payment-plan";
+import { planSummaryLabel, studentTuitionLine } from "@/lib/payment-plan";
 import type {
   AdminFamilyRegistrationResponse,
   AdminFamilyRegistrationStudentRow,
@@ -126,7 +126,6 @@ export function TuitionBreakdownTable({
   if (students.length === 0) {
     return null;
   }
-  const tuition = schoolYear.tuition ?? 0;
   // SNAP families with the SNAP award letter admin-confirmed get
   // the auto-coverage treatment. Pre-confirm SNAP families still
   // read the raw column so a half-set-up row doesn't get a
@@ -170,11 +169,22 @@ export function TuitionBreakdownTable({
     // Award row stays blank — admin shouldn't see a dollar value
     // before it's locked in.
     const awardConfirmed = s.confirmed_scholarship === true;
+    // This student's tuition for the year: the stored figure, which is
+    // the share of the year's tuition for the months they attend when
+    // they start mid-year. The coverage below is worked from this same
+    // number, so the row can't show one tuition and subtract another.
+    const tuitionLine = studentTuitionLine(
+      s,
+      schoolYear.tuition ?? 0,
+      schoolYear.billing_start_date
+    );
+    const tuition = tuitionLine.tuition;
     const scholarshipAmount: number | null = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : null;
     return {
       studentName: s.student_full_name,
+      tuitionLabel: tuitionLine.label,
       tuition,
       stepUpStatus: s.sufs_status,
       stepUpType: s.sufs_type,
@@ -228,7 +238,7 @@ export function TuitionBreakdownTable({
               {/* Annual Tuition */}
               <tr className="border-t">
                 <td className="px-4 py-3 text-muted-foreground">
-                  Annual Tuition
+                  {row.tuitionLabel}
                 </td>
                 <td className="px-4 py-3 text-right font-medium">
                   ${formatTuitionCurrency(row.tuition)}

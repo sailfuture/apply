@@ -62,7 +62,7 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
-import { planSummaryLabel } from "@/lib/payment-plan";
+import { planSummaryLabel, studentTuitionLine } from "@/lib/payment-plan";
 
 const SUFS_LABELS: Record<string, string> = {
   fes_eo_8: "FES-EO · Grade 8",
@@ -77,6 +77,9 @@ const SUFS_LABELS: Record<string, string> = {
 
 interface StudentRow {
   studentName: string;
+  /** "Annual Tuition", or "Tuition (Jan – Jul, 7 of 12 months)" for a
+   *  student who started mid-year. */
+  tuitionLabel: string;
   tuition: number;
   stepUpStatus: string;
   stepUpType: string;
@@ -240,6 +243,7 @@ export default function DashboardTuitionPage() {
         remaining_opportunity_amount?: number | null;
         monthly_amount?: number | null;
         payment_count?: number | null;
+        tuition_total?: number | null;
         confirmed_scholarship?: boolean;
       }[]
     ).filter((a) => a.registration_school_years_id === yearId);
@@ -253,7 +257,15 @@ export default function DashboardTuitionPage() {
       ).find((s) => s.id === app.registration_students_id);
       if (!student) continue;
 
-      const tuition = (sy.tuition as number) ?? 0;
+      // This student's tuition for the year: the stored figure, which
+      // is the share of the year's tuition for the months they attend
+      // when they start mid-year (a January start is 7 of 12).
+      const tuitionLine = studentTuitionLine(
+        app,
+        (sy.tuition as number) ?? 0,
+        sy.billing_start_date as string | null | undefined
+      );
+      const tuition = tuitionLine.tuition;
       const sufsType = app.sufs_type ?? "";
       const stepUpStatus = app.sufs_status ?? "";
 
@@ -292,6 +304,7 @@ export default function DashboardTuitionPage() {
 
       rows.push({
         studentName: `${student.first_name} ${student.last_name}`,
+        tuitionLabel: tuitionLine.label,
         tuition,
         stepUpStatus,
         stepUpType: sufsType,
@@ -416,7 +429,7 @@ export default function DashboardTuitionPage() {
                     {/* Annual Tuition */}
                     <tr className="border-t">
                       <td className="px-4 py-3 text-muted-foreground">
-                        Annual Tuition
+                        {row.tuitionLabel}
                       </td>
                       <td className="px-4 py-3 text-right font-medium">
                         ${formatCurrency(row.tuition)}

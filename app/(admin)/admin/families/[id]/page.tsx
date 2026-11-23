@@ -85,13 +85,14 @@ import {
 } from "@/lib/student-receipt";
 import {
   FULL_YEAR_PAYMENTS,
-  availablePlanOptions,
   paymentCountLabel,
-  planFirstMonthLabel,
   planRangeLabel,
   planSummaryLabel,
   resolvedPaymentCount,
+  startMonthOptions,
   storedPaymentCount,
+  studentTuitionLine,
+  tuitionMonthsOf,
 } from "@/lib/payment-plan";
 import type { PerStudentBillingPreview } from "@/app/api/admin/student-registration/by-student/route";
 import {
@@ -5211,7 +5212,6 @@ function TuitionBreakdownTable({
   isSnapFamily: boolean;
 }) {
   if (!schoolYear) return null;
-  const tuition = schoolYear.tuition ?? 0;
 
   // Build one row group per active student; skip students whose app
   // is soft-deleted so the totals match the family-payment snapshot
@@ -5263,11 +5263,22 @@ function TuitionBreakdownTable({
     // blank — admin shouldn't see a dollar value the family could
     // act on until they've locked it in.
     const awardConfirmed = app.confirmed_scholarship === true;
+    // This student's tuition for the year: the stored figure, which is
+    // the share of the year's tuition for the months they attend when
+    // they start mid-year. The coverage below is worked from this same
+    // number, so the row can't show one tuition and subtract another.
+    const tuitionLine = studentTuitionLine(
+      app,
+      schoolYear.tuition ?? 0,
+      schoolYear.billing_start_date
+    );
+    const tuition = tuitionLine.tuition;
     const scholarshipCoverage = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : 0;
     return {
       studentName: `${student.first_name} ${student.last_name}`.trim(),
+      tuitionLabel: tuitionLine.label,
       tuition,
       adminFee,
       familyPaysForTuition,
@@ -5322,7 +5333,7 @@ function TuitionBreakdownTable({
 
               <tr className="border-t">
                 <td className="px-4 py-3 text-muted-foreground">
-                  Annual Tuition
+                  {row.tuitionLabel}
                 </td>
                 <td className="px-4 py-3 text-right font-medium tabular-nums">
                   ${formatCurrency2(row.tuition)}
@@ -6655,18 +6666,27 @@ function DecisionStudentRow({
   // is no other way to re-send an unchanged amount to Stripe.
   const [overrideStripeFailed, setOverrideStripeFailed] = useState(false);
 
-  // ─── Payment plan ─── The yearly amount is never prorated for a
-  // late start: it is spread over the payments from the first payment
-  // month through the end of the billing year (`lib/payment-plan.ts`).
-  // The picker offers this month and every later one; a month that
-  // has passed can't be a first payment.
+  // ─── Enrollment start month ─── The month the student STARTS. It
+  // sets how many months of tuition they are charged (January = 7 of
+  // 12) and, from there, the payments: they run from that month, or
+  // from now if it has passed, through the end of the billing year
+  // (`lib/payment-plan.ts`). It is not the month the family registers:
+  // it can be ahead (enrolling now for January) or behind (already
+  // attending), so the picker offers every month of the year.
   const billingStartDate = schoolYear?.billing_start_date ?? null;
-  const [planNowMs] = useState(() => Date.now());
-  const planOptions = availablePlanOptions(billingStartDate, planNowMs);
+  const startOptions = startMonthOptions(billingStartDate);
   const savedPlanCount = storedPaymentCount(app?.payment_count);
-  // The plan picked while overriding. Staged like the dollar inputs,
-  // and saved from the same review dialog.
-  const [stagedPlanCount, setStagedPlanCount] = useState<number | null>(null);
+  // Months of tuition on file, read back from the stored tuition
+  // figure. Null until a determination is saved.
+  const savedStartMonths =
+    typeof app?.tuition_total === "number" && app.tuition_total > 0
+      ? tuitionMonthsOf(app.tuition_total, schoolYear?.tuition)
+      : null;
+  // The start month picked while overriding. Staged like the dollar
+  // inputs, and saved from the same review dialog.
+  const [stagedStartMonths, setStagedStartMonths] = useState<number | null>(
+    null
+  );
 
   // The "Remaining Amount Family Pays" input reads from the
   // `remaining_opportunity_amount` column on the app row. There's
@@ -6763,8 +6783,8 @@ function DecisionStudentRow({
     body: {
       sufsAwardAmount?: number;
       remainingOpportunityAmount?: number;
-      /** Monthly payments the yearly amount is spread over. */
-      paymentCount?: number;
+      /** Enrollment start month, as months of tuition (January = 7). */
+      tuitionMonths?: number;
     }
   ) {
     if (!app) return;
@@ -6831,32 +6851,21 @@ function DecisionStudentRow({
   const sufsStaged =
     stagedSufs != null && stagedSufs !== (app?.sufs_amount ?? null);
   const planStaged =
-    overriding && stagedPlanCount != null && stagedPlanCount !== savedPlanCount;
+    overriding &&
+    stagedStartMonths != null &&
+    stagedStartMonths !== savedStartMonths;
   const hasStagedChange =
     overriding && (remainingStaged || sufsStaged || planStaged);
-  // What the plan picker shows: the staged plan while overriding,
-  // otherwise the one on file (none on a row saved before plans
-  // existed).
-  const shownPlanCount = overriding
-    ? (stagedPlanCount ?? savedPlanCount)
-    : savedPlanCount;
-  // A plan on file whose first month has passed (billing is under
-  // way, or it moves to the months left when billing starts) still
-  // has to render as the picker's value.
-  const planPickerOptions =
-    shownPlanCount != null &&
-    !planOptions.some((o) => o.count === shownPlanCount)
-      ? [
-          {
-            count: shownPlanCount,
-            firstMonthLabel:
-              planFirstMonthLabel(billingStartDate, shownPlanCount) ??
-              paymentCountLabel(shownPlanCount),
-          },
-          ...planOptions,
-        ]
-      : planOptions;
+  // What the start-month picker shows: the staged month while
+  // overriding, otherwise the one on file (none until a determination
+  // is saved).
+  const shownStartMonths = overriding
+    ? (stagedStartMonths ?? savedStartMonths)
+    : savedStartMonths;
   const planReceipt = resolveStudentReceiptAmounts(app ?? {});
+  // Payments the saved amount is spread over (12 on a row saved before
+  // payment plans existed).
+  const shownPaymentCount = savedPlanCount ?? FULL_YEAR_PAYMENTS;
   // Typed something the override can't use (negative, not a number).
   // Said out loud, because otherwise Review just sits there disabled.
   const stagedInvalid =
@@ -6877,7 +6886,7 @@ function DecisionStudentRow({
       sufs_amount_input:
         app?.sufs_amount == null ? "" : String(app.sufs_amount),
     }));
-    setStagedPlanCount(null);
+    setStagedStartMonths(null);
     setAmountsUnlocked(false);
     setOverridePreview(null);
     setOverrideReason("");
@@ -6905,7 +6914,7 @@ function DecisionStudentRow({
         ? { remainingOpportunityAmount: stagedRemaining }
         : {}),
       ...(sufsStaged ? { sufsAwardAmount: stagedSufs } : {}),
-      ...(planStaged ? { paymentCount: stagedPlanCount } : {}),
+      ...(planStaged ? { tuitionMonths: stagedStartMonths } : {}),
     };
   }
 
@@ -7017,7 +7026,7 @@ function DecisionStudentRow({
       setOverridePreview(null);
       setOverrideReason("");
       setOverrideStripeFailed(false);
-      setStagedPlanCount(null);
+      setStagedStartMonths(null);
       setAmountsUnlocked(false);
     } catch (err) {
       // A failed save deliberately stays unlocked, dialog open, so
@@ -7467,28 +7476,30 @@ function DecisionStudentRow({
             </Field>
           </div>
 
-          {/* ─── Payment plan sub-card ─── How many monthly payments
-              the yearly amount above is spread over. A family that
-              starts partway through the year owes the same yearly
-              amount; the month of their first payment decides how
-              many payments it is split into (the last is always the
-              final month of the billing year). Saves on change like
-              the tier select; staged with the dollar inputs while
-              overriding. The server refuses a change once the student
-              has been billed. */}
+          {/* ─── Enrollment start sub-card ─── The month the student
+              starts. It sets the tuition they are charged for the year
+              (the months from that one through the end of the billing
+              year: January is 7 of 12) and the payments, which run
+              from that month — or from now, if it has passed — through
+              the year's last month. Separate from when the family
+              registers: a family enrolling in November for a January
+              start picks January. Saves on change like the tier
+              select; staged with the dollar inputs while overriding.
+              The server refuses a change once the student has been
+              billed. */}
           <div className="rounded-md border bg-white p-4 space-y-3">
             <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Payment Plan
+              Enrollment Start
             </h4>
             <Field>
-              <FieldLabel className="text-xs">First payment month</FieldLabel>
+              <FieldLabel className="text-xs">Enrollment start month</FieldLabel>
               <Select
-                value={shownPlanCount != null ? String(shownPlanCount) : ""}
+                value={shownStartMonths != null ? String(shownStartMonths) : ""}
                 disabled={
                   !savedDetermination ||
                   amountsReadOnly ||
                   savingField !== null ||
-                  planPickerOptions.length === 0
+                  startOptions.length === 0
                 }
                 onValueChange={(v) => {
                   const next = Number(v);
@@ -7496,40 +7507,44 @@ function DecisionStudentRow({
                   // Override edits are staged — they save from the
                   // review dialog, not on change.
                   if (overriding) {
-                    setStagedPlanCount(next);
+                    setStagedStartMonths(next);
                     return;
                   }
-                  if (next === savedPlanCount) return;
-                  void patchPerStudentBilling({ paymentCount: next });
+                  if (next === savedStartMonths) return;
+                  void patchPerStudentBilling({ tuitionMonths: next });
                 }}
               >
                 <SelectTrigger className="w-full bg-white sm:w-80">
                   <SelectValue placeholder="Not set" />
                 </SelectTrigger>
                 <SelectContent>
-                  {planPickerOptions.map((option) => (
+                  {startOptions.map((option) => (
                     <SelectItem key={option.count} value={String(option.count)}>
                       {option.firstMonthLabel} ·{" "}
-                      {paymentCountLabel(option.count)}
+                      {paymentCountLabel(option.count)} of tuition
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </Field>
             <p className="text-[11px] text-muted-foreground">
-              {planPickerOptions.length === 0
-                ? "This school year has no billing start date, so payments can't be counted yet. Add one on the school year."
-                : !savedDetermination
-                  ? "Enter the amounts above first. The plan starts this month unless you pick a later one."
+              {startOptions.length === 0
+                ? "This school year has no billing start date, so months can't be counted yet. Add one on the school year."
+                : !savedDetermination || shownStartMonths == null
+                  ? "Enter the amounts above first. The start month then defaults to the term the parent chose, or this month, and you can change it here."
                   : planStaged
-                    ? "Not saved yet. Review the change below to see the new monthly amount."
-                    : shownPlanCount == null
-                      ? `Saved before payment plans existed: $${formatCurrency2(planReceipt.monthly)}/mo is the yearly amount over 12 months. Pick the first payment month to spread it over the months that are left.`
-                      : `${shownPlanCount} monthly payment${shownPlanCount === 1 ? "" : "s"} of $${formatCurrency2(planReceipt.monthly)}${
-                          planRangeLabel(billingStartDate, shownPlanCount)
-                            ? ` (${planRangeLabel(billingStartDate, shownPlanCount)})`
-                            : ""
-                        }, $${formatCurrency2(planReceipt.subtotal)} for the year. Starting later never lowers the yearly amount; it is split into fewer payments.`}
+                    ? "Not saved yet. Review the change below to see the new tuition and monthly amount."
+                    : `Tuition for ${paymentCountLabel(shownStartMonths)}: $${formatCurrency2(
+                        app.tuition_total ?? 0
+                      )}${
+                        shownStartMonths < FULL_YEAR_PAYMENTS
+                          ? ` of the year's $${formatCurrency2(schoolYear?.tuition ?? 0)}`
+                          : ""
+                      }. The family pays $${formatCurrency2(planReceipt.subtotal)} in ${shownPaymentCount} monthly payment${shownPaymentCount === 1 ? "" : "s"} of $${formatCurrency2(planReceipt.monthly)}${
+                        planRangeLabel(billingStartDate, shownPaymentCount)
+                          ? ` (${planRangeLabel(billingStartDate, shownPaymentCount)})`
+                          : ""
+                      }. The annual fee is not prorated.`}
             </p>
           </div>
 
@@ -7853,6 +7868,11 @@ function DecisionStudentRow({
               <div className="rounded-md border overflow-hidden">
                 <table className="w-full text-sm">
                   <tbody className="divide-y">
+                    <AmountChangeRow
+                      label="Tuition for the year"
+                      before={overridePreview.current.tuition_total}
+                      after={overridePreview.next.tuition_total}
+                    />
                     <AmountChangeRow
                       label="Remaining amount family pays"
                       before={
