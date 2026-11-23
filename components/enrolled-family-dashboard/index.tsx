@@ -1404,8 +1404,16 @@ function ContactRow({
             />
           ) : null}
         </p>
+        {/* The phone number is one unit: on a phone-width card it used
+            to break after the hyphen ("(727) 555-" / "0193"). It stays
+            whole and moves to the next line instead; a long email can
+            still break. */}
         <p className="text-xs text-muted-foreground mt-0.5 break-words">
-          {[contact.phone, contact.email].filter(Boolean).join(" · ") || "—"}
+          {contact.phone ? (
+            <span className="whitespace-nowrap">{contact.phone}</span>
+          ) : null}
+          {contact.phone && contact.email ? " · " : null}
+          {contact.email || (contact.phone ? null : "—")}
         </p>
       </div>
       <div className="flex shrink-0 items-center">

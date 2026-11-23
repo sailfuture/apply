@@ -27,6 +27,7 @@ import {
   useApplicationFlow,
 } from "@/contexts/application-flow-context";
 import { ApplicationSideNav } from "@/components/application-side-nav";
+import { SectionLockProvider } from "@/components/section-lock";
 import { useApplicationSteps } from "@/hooks/use-application-steps";
 import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
@@ -347,7 +348,12 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
               }
               aria-busy={awaitingProgress || undefined}
             >
-              {children}
+              {/* The fieldset can't disable a widget that isn't a form
+                  control (a file dropzone is a focusable div), so the
+                  lock is also handed down for those to read. */}
+              <SectionLockProvider locked={saveOptions.completed === true}>
+                {children}
+              </SectionLockProvider>
             </fieldset>
 
             {/*

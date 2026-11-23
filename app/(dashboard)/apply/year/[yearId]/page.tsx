@@ -70,7 +70,7 @@ function AcceptanceStepCircle({
   disabled,
 }: {
   number: number;
-  status: "complete" | "pending" | "locked";
+  status: "complete" | "pending" | "not_started" | "locked";
   disabled?: boolean;
 }) {
   if (status === "complete") {
@@ -89,7 +89,16 @@ function AcceptanceStepCircle({
       </div>
     );
   }
-  // Pending — show edit icon
+  // Not started — the plain numbered circle, the same one an untouched
+  // step gets on the application overview (`StepCircle` above).
+  if (status === "not_started") {
+    return (
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+        {number}
+      </div>
+    );
+  }
+  // Pending (started, not finished) — show edit icon
   return (
     <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
       <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
@@ -249,7 +258,7 @@ function RegistrationPendingView({
           or call{" "}
           <a
             href={`tel:${MAIN_LINE}`}
-            className="text-primary underline underline-offset-2"
+            className="text-primary underline underline-offset-2 whitespace-nowrap"
           >
             {MAIN_LINE_DISPLAY}
           </a>
@@ -355,6 +364,11 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                     section is added next. */}
                 {registrationSteps.filter((s) => s.title !== "Submit Registration").map((step) => {
                   const isComplete = step.status === "complete";
+                  // The pencil only once there is saved work behind it;
+                  // until then the step shows its number. What counts
+                  // as started is decided in `useApplicationSteps`, so
+                  // this table and the side nav always agree.
+                  const isStarted = step.status === "in_progress";
                   return (
                     <tr
                       key={step.number}
@@ -368,7 +382,13 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                       <td className="px-4 py-4 w-12">
                         <AcceptanceStepCircle
                           number={step.number}
-                          status={isComplete ? "complete" : "pending"}
+                          status={
+                            isComplete
+                              ? "complete"
+                              : isStarted
+                                ? "pending"
+                                : "not_started"
+                          }
                         />
                       </td>
                       <td className="px-2 py-4">
@@ -402,9 +422,15 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                   <td className="px-2 py-4">
                     <p className="font-medium text-white">
                       Submit Registration
-                      <span className="ml-1.5 text-white/70 text-xs font-normal">
-                        ({submitSections.filter((s) => s.complete).length}/{submitSections.length})
-                      </span>
+                      {/* No count without the row it is counted from:
+                          until the row is here every section reads as
+                          incomplete, so this would say "(0/5)" and then
+                          jump to the real number. */}
+                      {regProgress ? (
+                        <span className="ml-1.5 text-white/70 text-xs font-normal">
+                          ({submitSections.filter((s) => s.complete).length}/{submitSections.length})
+                        </span>
+                      ) : null}
                     </p>
                   </td>
                   <td className="px-4 py-4 w-10">
@@ -458,7 +484,7 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
           or call{" "}
           <a
             href={`tel:${MAIN_LINE}`}
-            className="text-primary underline underline-offset-2"
+            className="text-primary underline underline-offset-2 whitespace-nowrap"
           >
             {MAIN_LINE_DISPLAY}
           </a>
@@ -801,15 +827,35 @@ export default function YearOverviewPage() {
   // the spinner until ALL data sources have settled at least once
   // eliminates that interim render.
   //
+  // The registration side of that list (the registration progress row
+  // and the packets) is only ever drawn by the accepted-stage views
+  // below. A family that is still applying or under review renders
+  // nothing from it, yet every overview load used to sit on the spinner
+  // until that fetch came back too. Only an accepted family waits now.
+  //
+  // `stage` is safe to branch on here: it comes from the family progress
+  // row, it reads "apply" until that row is in, and
+  // `familyProgressLoading` keeps the spinner up for exactly that
+  // stretch. So an accepted family is never let through as an applicant
+  // while its row is still on the way.
+  //
+  // For an accepted family the wait is on the row itself rather than on
+  // the fetch's loading flag: everything the accepted views decide
+  // (submitted? enrolled? which sections are done?) reads as "no" from a
+  // missing row, and the redirect effect above already refuses to pick a
+  // destination without it.
+  const awaitsRegistration = stage === "accepted";
+  const regProgressPending = awaitsRegistration && regProgress === null;
+
   // `yearPacketsPending` only fires when registration was submitted —
   // the SWR key is `null` otherwise, so `yearPackets === undefined`
   // means "not fetching" not "still loading."
   const yearPacketsPending =
-    isRegistrationSubmitted && yearPackets === undefined;
+    awaitsRegistration && isRegistrationSubmitted && yearPackets === undefined;
   const initialDataLoading =
     loading ||
     familyProgressLoading ||
-    regProgressLoading ||
+    regProgressPending ||
     studentsLoading ||
     yearPacketsPending;
 
@@ -907,9 +953,14 @@ export default function YearOverviewPage() {
                 admissions@sailfuture.org
               </a>{" "}
               or call{" "}
+              {/* `whitespace-nowrap` on every phone link on this page: a
+                  number is one unit. Left to wrap, a phone-width card
+                  broke it after the hyphen ("(813) 505-" / "3539").
+                  The whole number now moves to the next line instead;
+                  at about 100px wide it can't overflow the card. */}
               <a
                 href="tel:+18135053539"
-                className="text-primary underline underline-offset-2"
+                className="text-primary underline underline-offset-2 whitespace-nowrap"
               >
                 (813) 505-3539
               </a>
@@ -1093,7 +1144,7 @@ export default function YearOverviewPage() {
             or call{" "}
             <a
               href="tel:+18135053539"
-              className="text-primary underline underline-offset-2"
+              className="text-primary underline underline-offset-2 whitespace-nowrap"
             >
               (813) 505-3539
             </a>
@@ -1200,7 +1251,7 @@ export default function YearOverviewPage() {
           or call{" "}
           <a
             href={`tel:${MAIN_LINE}`}
-            className="text-primary underline underline-offset-2"
+            className="text-primary underline underline-offset-2 whitespace-nowrap"
           >
             {MAIN_LINE_DISPLAY}
           </a>

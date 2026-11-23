@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { convertHeicToJpeg } from "@/lib/heic";
 import { useAsRef } from "@/hooks/use-as-ref";
 import { useLazyRef } from "@/hooks/use-lazy-ref";
+import { useSectionLocked } from "@/components/section-lock";
 
 const ROOT_NAME = "FileUpload";
 const DROPZONE_NAME = "FileUploadDropzone";
@@ -233,7 +234,7 @@ function FileUpload(props: FileUploadProps) {
     label,
     name,
     asChild,
-    disabled = false,
+    disabled: disabledProp = false,
     invalid = false,
     multiple = false,
     required = false,
@@ -241,6 +242,13 @@ function FileUpload(props: FileUploadProps) {
     className,
     ...rootProps
   } = props;
+
+  // A completed section is locked with a disabled fieldset, which
+  // cannot reach the dropzone (a focusable div, not a form control):
+  // it stayed in the Tab order and still uploaded a pasted file. Inside
+  // a locked section the whole uploader counts as disabled.
+  const sectionLocked = useSectionLocked();
+  const disabled = disabledProp || sectionLocked;
 
   const inputId = React.useId();
   const dropzoneId = React.useId();

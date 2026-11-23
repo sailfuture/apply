@@ -19,7 +19,12 @@ import { useRef } from "react";
 import { toast } from "sonner";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { apiFetch } from "@/hooks/use-api";
+import {
+  apiFetch,
+  stepSavesSettled,
+  trackStepSave,
+  useApiCacheReader,
+} from "@/hooks/use-api";
 import { useSWRConfig } from "swr";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { cn } from "@/lib/utils";
@@ -74,18 +79,59 @@ export default function InitialTestingStepPage() {
     }
   }, [progress?.type, router, yearId]);
 
-  const [students, setStudents] = useState<Student[]>([]);
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The students and applications as SWR already holds them — the
+  // header and the side nav keep both lists loaded, and a box ticked
+  // here is written into the cached applications (see
+  // `toggleScheduled`). Moving here from another step starts from them
+  // instead of a skeleton; `fetchData` still runs behind it and replaces
+  // them with what the server says. Null when either list is not cached
+  // yet (the step was opened by URL).
+  const readCached = useApiCacheReader();
+  const [seed] = useState(() => {
+    const cachedStudents = readCached<Student[]>("/api/students");
+    const cachedApps = readCached<Application[]>("/api/applications");
+    return Array.isArray(cachedStudents) && Array.isArray(cachedApps)
+      ? {
+          students: cachedStudents,
+          applications: cachedApps.filter(
+            (a) => a.registration_school_years_id === yearId
+          ),
+        }
+      : null;
+  });
+
+  const [students, setStudents] = useState<Student[]>(
+    () => seed?.students ?? []
+  );
+  const [applications, setApplications] = useState<Application[]>(
+    () => seed?.applications ?? []
+  );
+  const [loading, setLoading] = useState(seed === null);
   // Set only when the FIRST load fails; a later failure keeps what is
   // on screen (same rule as the SWR-driven pages).
   const [loadFailed, setLoadFailed] = useState(false);
-  const loadedOnceRef = useRef(false);
+  const loadedOnceRef = useRef(seed !== null);
   const [savingAppId, setSavingAppId] = useState<number | null>(null);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  // Counts the boxes ticked or cleared here. A background refresh that
+  // started before the latest one keeps the page's own applications —
+  // its copy may predate the change.
+  const localChangesRef = useRef(0);
+  // Only the newest load may apply its result.
+  const loadSeqRef = useRef(0);
 
-  const fetchData = useCallback(async () => {
+  // `background` is the load that runs behind a page already on screen
+  // (the one on arrival). It must not undo a box the parent has ticked
+  // since it started; "Try again" always applies, as it always has.
+  const fetchData = useCallback(async (opts?: { background?: boolean }) => {
+    const seq = ++loadSeqRef.current;
+    const changesAtStart = localChangesRef.current;
     try {
+      // A save from a moment ago (a box ticked on the way out of this
+      // step last visit, or a student just edited on the Students step)
+      // has to land first, or this read can come back without it and
+      // show the old value.
+      await stepSavesSettled();
       // `apiFetch` retries a 401 once after refreshing the Clerk token.
       // Any other non-2xx used to be skipped silently, which rendered
       // "No students enrolled" — it now throws so the catch below can
@@ -96,23 +142,47 @@ export default function InitialTestingStepPage() {
       ]);
       if (!studentsRes.ok) throw new Error(`API error ${studentsRes.status}`);
       if (!appsRes.ok) throw new Error(`API error ${appsRes.status}`);
-      setStudents(await studentsRes.json());
+      const allStudents: Student[] = await studentsRes.json();
       const allApps: Application[] = await appsRes.json();
-      setApplications(
-        allApps.filter((a) => a.registration_school_years_id === yearId)
-      );
+      // A newer load started while this one was out; it decides.
+      if (seq !== loadSeqRef.current) return;
+
+      // The parent only reads the students here, so they always take
+      // the server's answer.
+      setStudents(allStudents);
+      const keepLocal =
+        opts?.background === true &&
+        loadedOnceRef.current &&
+        localChangesRef.current !== changesAtStart;
+      if (!keepLocal) {
+        setApplications(
+          allApps.filter((a) => a.registration_school_years_id === yearId)
+        );
+      }
+
+      // Hand the fresh copies to SWR too: they are what this step (and
+      // the header and side nav) start from next time. The applications
+      // are left alone when the page kept its own — the cache already
+      // carries that change, and this copy may predate it.
+      void swrMutate("/api/students", allStudents, { revalidate: false });
+      if (!keepLocal) {
+        void swrMutate("/api/applications", allApps, { revalidate: false });
+      }
       loadedOnceRef.current = true;
       setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch:", err);
-      if (!loadedOnceRef.current) setLoadFailed(true);
+      if (seq === loadSeqRef.current && !loadedOnceRef.current) {
+        setLoadFailed(true);
+      }
     } finally {
-      setLoading(false);
+      // An overtaken load leaves the skeleton to the one that replaced it.
+      if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [yearId]);
+  }, [yearId, swrMutate]);
 
   useEffect(() => {
-    fetchData();
+    fetchData({ background: true });
   }, [fetchData]);
 
   const handleCompleteTestingRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -172,8 +242,31 @@ export default function InitialTestingStepPage() {
   // reads). Keeping the auto-revoke here too just doubles up the work
   // and re-introduces the layout-race bug that motivated the move.
 
+  /** Write a ticked or cleared box into the cached `/api/applications`
+   *  list (every year's rows, as the hooks hold them), so the side nav
+   *  and the next visit to this step see it. */
+  function setCachedScheduled(appId: number, value: boolean) {
+    void swrMutate(
+      "/api/applications",
+      (curr: Application[] | undefined) =>
+        Array.isArray(curr)
+          ? curr.map((a) =>
+              a.id === appId
+                ? {
+                    ...a,
+                    nwea_testing_complete: value,
+                    nwea_testing_scheduled: value,
+                  }
+                : a
+            )
+          : curr,
+      { revalidate: false }
+    );
+  }
+
   async function toggleScheduled(appId: number, current: boolean) {
     const newVal = !current;
+    localChangesRef.current += 1;
     // Optimistic update
     setApplications((prev) =>
       prev.map((a) =>
@@ -182,23 +275,34 @@ export default function InitialTestingStepPage() {
           : a
       )
     );
+    // The cached list gets the change straight away, so leaving the
+    // step and coming back shows the box as it was left.
+    setCachedScheduled(appId, newVal);
+    const request = fetch(`/api/applications/${appId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nwea_testing_complete: newVal,
+        nwea_testing_scheduled: newVal,
+      }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Save failed (${r.status})`);
+      return r;
+    });
+    // Registered so the next load (here or on another step) waits for it.
+    trackStepSave(request);
     try {
-      await trackAutosave(
-        fetch(`/api/applications/${appId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nwea_testing_complete: newVal,
-            nwea_testing_scheduled: newVal,
-          }),
-        }).then(async (r) => {
-          if (!r.ok) throw new Error(`Save failed (${r.status})`);
-          return r;
-        })
-      );
+      await trackAutosave(request);
+      // Once more now that it is saved: the 30-second refetch of the
+      // list may have overlapped the save and put the old row back.
+      setCachedScheduled(appId, newVal);
     } catch (err) {
       console.error("Failed to save:", err);
+      // A save that fails refetches the cached list, putting back what
+      // the server has.
+      void swrMutate("/api/applications");
       // Revert
+      localChangesRef.current += 1;
       setApplications((prev) =>
         prev.map((a) =>
           a.id === appId

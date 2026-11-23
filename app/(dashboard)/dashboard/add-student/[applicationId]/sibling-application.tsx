@@ -608,19 +608,34 @@ function BackToDashboard() {
   );
 }
 
-/** Same lock treatment as the apply layout: a completed section is
- *  dimmed and fully non-interactive until it's unlocked. */
+/** Same lock as the apply layout (`/apply/year/[yearId]/layout.tsx`): a
+ *  completed section is dimmed and switched off until it's unlocked.
+ *
+ *  A <fieldset disabled>, not a div. `pointer-events-none` alone only
+ *  stops the mouse: the new student's Award ID field stayed reachable
+ *  with Tab and still saved on blur, so a section marked complete
+ *  could change underneath admissions. A disabled fieldset switches off
+ *  every input and button inside it for keyboard and mouse alike.
+ *
+ *  As in the layout, links keep their pointer events, so anything the
+ *  step shows as a link still opens while locked. `min-w-0` undoes a
+ *  fieldset's built-in minimum width, and the opacity reset keeps
+ *  disabled fields (the enrolled students' Award IDs are disabled
+ *  either way) from being dimmed twice. The "Click to Edit" button that
+ *  unlocks the section lives in `FinancialAidActions`, outside this. */
 function DimWhenCompleted({ children }: { children: ReactNode }) {
   const { saveOptions } = useApplicationFlow();
   return (
-    <div
+    <fieldset
+      disabled={saveOptions.completed === true}
       className={
-        saveOptions.completed ? "opacity-50 pointer-events-none select-none" : ""
+        saveOptions.completed
+          ? "min-w-0 opacity-50 pointer-events-none select-none [&_:disabled]:opacity-100! [&_a[href]]:pointer-events-auto"
+          : "min-w-0"
       }
-      aria-disabled={saveOptions.completed || undefined}
     >
       {children}
-    </div>
+    </fieldset>
   );
 }
 

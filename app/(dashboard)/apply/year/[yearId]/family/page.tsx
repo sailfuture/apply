@@ -124,6 +124,44 @@ const parentFieldKey = (parentId: number, field: ParentSaveField) =>
   `${parentId}:${field}`;
 const FAMILY_NAME_KEY = "family_name";
 
+/** DOM id of one parent's field, so a failed "Complete" can go to it. */
+const parentFieldId = (parentId: number, field: ParentSaveField) =>
+  `parent-field-${parentId}-${field}`;
+
+// Everything "Complete" checks on a parent (`isParentComplete`), in the
+// order the card shows it. The first one still empty is where a failed
+// Complete takes the parent. Email is in here although it isn't marked
+// required: Complete refuses a parent without one, and otherwise that
+// case would still leave them with only the toast.
+const COMPLETE_FIELDS_IN_CARD_ORDER: readonly ParentSaveField[] = [
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "relationship",
+  "address_line_1",
+  "city",
+  "state",
+  "zipcode",
+];
+
+/** Bring a field into view and put the cursor in it (the Students step
+ *  does the same after a failed Complete). */
+function focusField(id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const reduceMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)"
+  ).matches;
+  el.scrollIntoView({
+    behavior: reduceMotion ? "instant" : "smooth",
+    block: "center",
+  });
+  // `preventScroll`: focusing would otherwise jump straight there and
+  // cut the smooth scroll short.
+  el.focus({ preventScroll: true });
+}
+
 /** `/api/families` as the SWR hooks cache it. */
 interface CachedFamily {
   family_name?: string | null;
@@ -601,6 +639,16 @@ export default function FamilyStepPage() {
         )
       );
       toast.error("Please fill out all required fields for each parent/guardian.");
+      // The toast alone left the parent hunting: with two guardians the
+      // empty field can be several screens down. Go to the first one,
+      // top to bottom, and put the cursor in it.
+      for (const p of parents) {
+        const firstEmpty = COMPLETE_FIELDS_IN_CARD_ORDER.find((f) => !p[f]);
+        if (firstEmpty) {
+          focusField(parentFieldId(p.id, firstEmpty));
+          break;
+        }
+      }
       throw new Error("Validation failed");
     }
     await handleSaveAllRef.current();
@@ -882,6 +930,7 @@ export default function FamilyStepPage() {
                       <Field>
                         <FieldLabel className="text-xs">First Name <span className="text-red-400">*</span></FieldLabel>
                         <Input
+                          id={parentFieldId(parent.id, "first_name")}
                           className={isMissing(parent, "first_name") ? "border-2 border-red-400" : ""}
                           placeholder="Jane"
                           value={parent.first_name || ""}
@@ -897,6 +946,7 @@ export default function FamilyStepPage() {
                       <Field>
                         <FieldLabel className="text-xs">Last Name <span className="text-red-400">*</span></FieldLabel>
                         <Input
+                          id={parentFieldId(parent.id, "last_name")}
                           className={isMissing(parent, "last_name") ? "border-2 border-red-400" : ""}
                           placeholder="Walsh"
                           value={parent.last_name || ""}
@@ -921,6 +971,7 @@ export default function FamilyStepPage() {
                       <Field>
                         <FieldLabel className="text-xs">Email</FieldLabel>
                         <Input
+                          id={parentFieldId(parent.id, "email")}
                           type="email"
                           placeholder="email@example.com"
                           value={parent.email || ""}
@@ -948,6 +999,7 @@ export default function FamilyStepPage() {
                         <FieldLabel className="text-xs">
                           Phone <span className="text-red-400">*</span></FieldLabel>
                         <PhoneInput
+                          id={parentFieldId(parent.id, "phone")}
                           className={isMissing(parent, "phone") ? "border-2 border-red-400" : ""}
                           value={parent.phone || ""}
                           autoComplete="tel"
@@ -972,6 +1024,7 @@ export default function FamilyStepPage() {
                         <FieldLabel className="text-xs">
                           Relationship <span className="text-red-400">*</span></FieldLabel>
                         <Input
+                          id={parentFieldId(parent.id, "relationship")}
                           className={isMissing(parent, "relationship") ? "border-2 border-red-400" : ""}
                           placeholder="e.g. Mother"
                           value={parent.relationship || ""}
@@ -1029,6 +1082,7 @@ export default function FamilyStepPage() {
                               browsers fall back to ad-hoc heuristics
                               and most users see no suggestions. */}
                           <Input
+                            id={parentFieldId(parent.id, "address_line_1")}
                             className={isMissing(parent, "address_line_1") ? "border-2 border-red-400" : ""}
                             placeholder="123 Main Street"
                             value={parent.address_line_1 || ""}
@@ -1063,6 +1117,7 @@ export default function FamilyStepPage() {
                           <FieldLabel className="text-xs">
                             City <span className="text-red-400">*</span></FieldLabel>
                           <Input
+                            id={parentFieldId(parent.id, "city")}
                             className={isMissing(parent, "city") ? "border-2 border-red-400" : ""}
                             placeholder="St. Petersburg"
                             value={parent.city || ""}
@@ -1079,6 +1134,10 @@ export default function FamilyStepPage() {
                           <FieldLabel className="text-xs">
                             State <span className="text-red-400">*</span></FieldLabel>
                           <StateSelect
+                            // Lands on the picker's button, which is
+                            // what a failed Complete scrolls to and
+                            // focuses when State is the first gap.
+                            id={parentFieldId(parent.id, "state")}
                             value={parent.state || ""}
                             // No "left the field" moment on this picker:
                             // it turns red after a failed Complete.
@@ -1093,6 +1152,7 @@ export default function FamilyStepPage() {
                           <FieldLabel className="text-xs">
                             Zip Code <span className="text-red-400">*</span></FieldLabel>
                           <Input
+                            id={parentFieldId(parent.id, "zipcode")}
                             className={isMissing(parent, "zipcode") ? "border-2 border-red-400" : ""}
                             placeholder="33701"
                             value={parent.zipcode || ""}

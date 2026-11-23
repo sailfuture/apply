@@ -47,7 +47,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "yearId must be a number" }, { status: 400 });
   }
 
-  const row = await resolveProgress(familyId, yearId);
+  // Read the row first; only read-or-create when there isn't one.
+  // `resolveProgress` starts by reading the family's application
+  // progress row, which it needs only to default a CREATE, and then
+  // reads this table anyway. So every page that loads the row (the
+  // overview and each registration step) paid for two uncached Xano
+  // reads, one after the other, to get a row that already existed.
+  //
+  // `getByFamilyAndYear` answers null both for "no row" and for a read
+  // that failed, and either way `resolveProgress` takes over exactly as
+  // before. If duplicate rows exist it returns the one `resolve()` would
+  // keep (same ordering) without merging or deleting the others; that
+  // clean-up still happens on the next call that resolves the row (any
+  // PATCH below, the PandaDoc routes, the admin pages).
+  const existing = await xano.studentRegistrationProgress.getByFamilyAndYear(
+    familyId,
+    yearId
+  );
+  const row = existing ?? (await resolveProgress(familyId, yearId));
   return NextResponse.json(row, { status: 200 });
 }
 

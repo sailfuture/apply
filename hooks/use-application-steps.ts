@@ -27,6 +27,12 @@ export interface StepDef {
   href: string;
 }
 
+/** A file Xano has stored (here, a saved signature): `{ path, url, … }`.
+ *  Null or an empty object means nothing was saved. */
+function hasSavedFile(value: Record<string, unknown> | null | undefined): boolean {
+  return !!value && typeof value.path === "string" && value.path !== "";
+}
+
 function getStatus(complete: boolean, started: boolean): StepStatus {
   if (complete) return "complete";
   if (started) return "in_progress";
@@ -85,6 +91,15 @@ export function useApplicationSteps(yearId: number) {
     /** Whether the enrollment-agreement PandaDoc has been dispatched yet.
      *  Used as a "started" signal so the sidenav can show in-progress. */
     enrollment_agreement_pandadoc_id?: string | null;
+    /** "void" marks a lunch letter whose document was retired. */
+    lunch_letter_status?: string | null;
+    /** Tuition and Volunteer Hours: printed name and saved signature.
+     *  "Started" signals for a step reopened with "Click to Edit". */
+    name?: string | null;
+    signature_data?: Record<string, unknown> | null;
+    tuition_scholarship_signature?: Record<string, unknown> | null;
+    name_volunteer?: string | null;
+    signature_data_volunteer?: Record<string, unknown> | null;
   } | null>(
     yearId ? `/api/student-registration-progress?yearId=${yearId}` : null,
     fetcher,
@@ -287,12 +302,34 @@ export function useApplicationSteps(yearId: number) {
   const postEnrollmentSigned = regProgressData?.isEnrollment === true;
   const registrationComplete = regProgressData?.isRegistration === true;
   const volunteerAcknowledged = regProgressData?.isVolunteerHours === true;
-  // Force the "started" flag on so `getStatus` returns `in_progress`
-  // (amber edit pencil) rather than `not_started` (muted numbered
-  // circle). The family can land on this step at any time without
-  // any preceding gate clearing.
-  const volunteerStarted = true;
   const lunchLetterSigned = regProgressData?.isLunchLetter === true;
+
+  // "Started" = saved work that isn't finished yet, which is what the
+  // amber pencil means. Every registration step used to be forced to
+  // started, so a family accepted a minute ago saw the pencil on all
+  // five before opening any of them. The progress row holds the
+  // evidence for four:
+  //   - Tuition, Volunteer Hours: the signature and printed name are
+  //     saved in the same request that completes the step, so these
+  //     read as started only after it is reopened with "Click to Edit".
+  //   - Enrollment Agreement, Lunch Letter: the PandaDoc document
+  //     exists (both pages prepare it as soon as the step is opened).
+  //   - Registration packet: nothing on this row says a packet is
+  //     partly filled in, so it shows its number until it is complete.
+  // A step that hasn't been started is still open to the parent; the
+  // number only says they haven't begun it.
+  const tuitionStarted =
+    (regProgressData?.name ?? "").trim() !== "" ||
+    hasSavedFile(regProgressData?.signature_data) ||
+    hasSavedFile(regProgressData?.tuition_scholarship_signature);
+  const enrollmentStarted = !!regProgressData?.enrollment_agreement_pandadoc_id;
+  const registrationStarted = false;
+  const volunteerStarted =
+    (regProgressData?.name_volunteer ?? "").trim() !== "" ||
+    hasSavedFile(regProgressData?.signature_data_volunteer);
+  const lunchLetterStarted =
+    !!regProgressData?.lunch_letter_pandadoc_id &&
+    regProgressData?.lunch_letter_status !== "void";
 
   // Billing is no longer a parent-facing step — admin creates the
   // Stripe `send_invoice` subscription on Confirm Registration, and
@@ -311,24 +348,32 @@ export function useApplicationSteps(yearId: number) {
         number: 1,
         title: "Review Tuition & Scholarship Award",
         description: "Review your financial aid award and tuition details.",
-        status: getStatus(tuitionReviewed, true),
-        detail: tuitionReviewed ? "Reviewed" : "In progress",
+        status: getStatus(tuitionReviewed, tuitionStarted),
+        detail: tuitionReviewed
+          ? "Reviewed"
+          : tuitionStarted
+            ? "In progress"
+            : "Not started",
         href: `${base}/tuition`,
       },
       {
         number: 2,
         title: "Sign Enrollment Agreement",
         description: "Review and sign the enrollment agreement for the upcoming year.",
-        status: getStatus(postEnrollmentSigned, true),
-        detail: postEnrollmentSigned ? "Signed" : "In progress",
+        status: getStatus(postEnrollmentSigned, enrollmentStarted),
+        detail: postEnrollmentSigned
+          ? "Signed"
+          : enrollmentStarted
+            ? "In progress"
+            : "Not started",
         href: `${base}/enrollment-signing`,
       },
       {
         number: 3,
         title: "Begin Registration Process",
         description: "Complete the final registration steps to confirm your student\u2019s seat.",
-        status: getStatus(registrationComplete, true),
-        detail: registrationComplete ? "Complete" : "In progress",
+        status: getStatus(registrationComplete, registrationStarted),
+        detail: registrationComplete ? "Complete" : "Not started",
         href: `${base}/registration`,
       },
       {
@@ -336,15 +381,23 @@ export function useApplicationSteps(yearId: number) {
         title: "Volunteer Hours Acknowledgment",
         description: "Acknowledge the mandatory volunteer-hours commitment for the year.",
         status: getStatus(volunteerAcknowledged, volunteerStarted),
-        detail: volunteerAcknowledged ? "Acknowledged" : "In progress",
+        detail: volunteerAcknowledged
+          ? "Acknowledged"
+          : volunteerStarted
+            ? "In progress"
+            : "Not started",
         href: `${base}/volunteer-hours`,
       },
       {
         number: 5,
         title: "Free & Reduced Lunch Letter",
         description: "Complete and sign your household\u2019s free and reduced lunch letter.",
-        status: getStatus(lunchLetterSigned, true),
-        detail: lunchLetterSigned ? "Signed" : "In progress",
+        status: getStatus(lunchLetterSigned, lunchLetterStarted),
+        detail: lunchLetterSigned
+          ? "Signed"
+          : lunchLetterStarted
+            ? "In progress"
+            : "Not started",
         href: `${base}/lunch-letter`,
       },
       {
@@ -359,11 +412,15 @@ export function useApplicationSteps(yearId: number) {
     [
       base,
       tuitionReviewed,
+      tuitionStarted,
       postEnrollmentSigned,
+      enrollmentStarted,
       registrationComplete,
+      registrationStarted,
       volunteerAcknowledged,
       volunteerStarted,
       lunchLetterSigned,
+      lunchLetterStarted,
       allRegistrationSectionsComplete,
     ]
   );

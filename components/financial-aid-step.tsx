@@ -44,7 +44,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { apiFetch } from "@/hooks/use-api";
+import {
+  apiFetch,
+  stepSavesSettled,
+  trackStepSave,
+  useApiCacheReader,
+  type ApiCacheReader,
+} from "@/hooks/use-api";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { toast } from "sonner";
 import {
@@ -223,6 +229,321 @@ interface Benefit {
    *  to verify. Replaces the family-wide `other_benefits` blob; each
    *  benefit row is now self-contained. */
   benefit_documentation: Record<string, unknown>[];
+}
+
+/**
+ * The Opportunity Scholarship form as this step holds it: one entry for
+ * each autosaved field, under the name `buildSnapshot` gives it.
+ */
+interface ScholarshipFormValues {
+  householdAdults: number;
+  householdChildren: number;
+  noContributing: boolean;
+  businessIncome: number | null;
+  capitalGains: number | null;
+  childSupport: number | null;
+  alimony: number | null;
+  trustsIncome: number | null;
+  otherIncome: number | null;
+  describeOtherIncome: string;
+  assetsChecking: number | null;
+  assetsSavings: number | null;
+  assetsRetirement: number | null;
+  assetsStocks: number | null;
+  assetsTrusts: number | null;
+  assetsBusiness: number | null;
+  debtsCreditCards: number | null;
+  debtsStudentLoans: number | null;
+  debtsPersonalLoans: number | null;
+  govBenefits: boolean;
+  familyContribution: number | null;
+  advocacyLetter: string;
+  fullNameSignature: string;
+  signatureMeta: Record<string, unknown> | null;
+  unemploymentLetter: Record<string, unknown>[];
+  taxReturnFiles: Record<string, unknown>[];
+  members: ContributingMember[];
+  homes: Home[];
+  vehicles: Vehicle[];
+  benefits: Benefit[];
+}
+
+/** A scholarship record as this step puts it on screen. */
+interface ScholarshipOnScreen {
+  form: ScholarshipFormValues;
+  /** Where the saved signature image is, for redrawing it on the pad. */
+  signatureUrl: string | null;
+  choice: "none" | "snap" | "full" | null;
+  snapBenefitsFiles: Record<string, unknown>[];
+  otherBenefitsFiles: Record<string, unknown>[];
+}
+
+/** What the step shows for a family with no record yet: no choice made
+ *  and an empty form (a money field is `null` until it is touched). */
+const NO_SCHOLARSHIP: ScholarshipOnScreen = {
+  form: {
+    householdAdults: 0,
+    householdChildren: 0,
+    noContributing: false,
+    businessIncome: null,
+    capitalGains: null,
+    childSupport: null,
+    alimony: null,
+    trustsIncome: null,
+    otherIncome: null,
+    describeOtherIncome: "",
+    assetsChecking: null,
+    assetsSavings: null,
+    assetsRetirement: null,
+    assetsStocks: null,
+    assetsTrusts: null,
+    assetsBusiness: null,
+    debtsCreditCards: null,
+    debtsStudentLoans: null,
+    debtsPersonalLoans: null,
+    govBenefits: false,
+    familyContribution: null,
+    advocacyLetter: "",
+    fullNameSignature: "",
+    signatureMeta: null,
+    unemploymentLetter: [],
+    taxReturnFiles: [],
+    members: [],
+    homes: [],
+    vehicles: [],
+    benefits: [],
+  },
+  signatureUrl: null,
+  choice: null,
+  snapBenefitsFiles: [],
+  otherBenefitsFiles: [],
+};
+
+interface LoadedScholarship extends ScholarshipOnScreen {
+  /** The record's own row, as the server returned it. */
+  row: Scholarship;
+}
+
+/**
+ * A scholarship record as `GET /api/scholarship/:id` returns it, mapped
+ * onto this step's state. One mapping for a response just fetched and
+ * for the copy of one in the SWR cache that a visit opens from, so the
+ * two cannot drift apart. Null for a wrapper that came back without its
+ * `opportunity_scholarship` row.
+ */
+function readScholarshipRecord(
+  resp: FullScholarshipResponse | null | undefined
+): LoadedScholarship | null {
+  const s = resp?.opportunity_scholarship;
+  if (!resp || !s) return null;
+
+  let signatureMeta: Record<string, unknown> | null = null;
+  let signatureUrl: string | null = null;
+  if (s.signature) {
+    let sig: Record<string, unknown>;
+    if (typeof s.signature === "string") {
+      try { sig = JSON.parse(s.signature); } catch { sig = {}; }
+    } else {
+      sig = s.signature as Record<string, unknown>;
+    }
+    if (Object.keys(sig).length > 0) {
+      signatureMeta = sig;
+      if (typeof sig.url === "string") {
+        signatureUrl = sig.url;
+      } else if (typeof sig.path === "string") {
+        const base = process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
+        signatureUrl = `${base}${sig.path}`;
+      }
+    }
+  }
+
+  return {
+    row: s,
+    form: {
+      householdAdults: s.household_adults ?? 0,
+      householdChildren: s.household_children ?? 0,
+      noContributing: s.no_contributing_member ?? false,
+      // Monetary fields stay null when Xano returns null — that is the
+      // "untouched" placeholder state. A real zero saved by the family
+      // round-trips back as `0`.
+      businessIncome: s.business_income_monthly ?? null,
+      capitalGains: s.capital_gains_monthly ?? null,
+      childSupport: s.child_support_monthly ?? null,
+      alimony: s.alimony_monthly ?? null,
+      trustsIncome: s.trusts_monthly ?? null,
+      otherIncome: s.other_income_monthly ?? null,
+      describeOtherIncome: s.describe_other_income ?? "",
+      assetsChecking: s.assets_checking ?? null,
+      assetsSavings: s.assets_savings ?? null,
+      assetsRetirement: s.assets_retirement_savings ?? null,
+      assetsStocks: s.assets_stocks_bonds_securities ?? null,
+      assetsTrusts: s.assets_trusts_inheritance ?? null,
+      assetsBusiness: s.assets_business ?? null,
+      debtsCreditCards: s.debts_credit_cards ?? null,
+      debtsStudentLoans: s.debts_student_loans ?? null,
+      debtsPersonalLoans: s.debts_personal_loans ?? null,
+      govBenefits: s.government_benefits ?? false,
+      familyContribution: s.family_contribution_per_month ?? null,
+      advocacyLetter: s.scholarship_advocacy_letter ?? "",
+      fullNameSignature: s.full_name_signature ?? "",
+      signatureMeta,
+      unemploymentLetter: Array.isArray(s.unemployment_letter)
+        ? s.unemployment_letter
+        : [],
+      taxReturnFiles: Array.isArray(s.tax_return) ? s.tax_return : [],
+      // Coerce to arrays defensively — a non-array child (e.g. a single
+      // object from a Xano expansion quirk) would otherwise slip past
+      // `?? []` and throw on `.map()`, blanking the page.
+      members: Array.isArray(resp.contributing_members)
+        ? resp.contributing_members
+        : [],
+      homes: Array.isArray(resp.homes) ? resp.homes : [],
+      vehicles: Array.isArray(resp.vehicles) ? resp.vehicles : [],
+      benefits: Array.isArray(resp.benefits) ? resp.benefits : [],
+    },
+    signatureUrl,
+    choice: s.isNotParticipating
+      ? "none"
+      : s.isSNAPBenefits
+        ? "snap"
+        : s.isOpportunityScholarship
+          ? "full"
+          : null,
+    snapBenefitsFiles:
+      Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0
+        ? s.snap_benefits
+        : [],
+    otherBenefitsFiles:
+      Array.isArray(s.other_benefits) && s.other_benefits.length > 0
+        ? s.other_benefits
+        : [],
+  };
+}
+
+/** The family's scholarship row for a year, under the key the hooks
+ *  cache it by (`useScholarship`). */
+const scholarshipKey = (familyId: number, yearId: number) =>
+  `/api/scholarship?familyId=${familyId}&yearId=${yearId}`;
+
+/** The full record: the row with its members, homes, vehicles and
+ *  benefits. */
+const scholarshipRecordKey = (id: number) => `/api/scholarship/${id}`;
+
+interface FinancialAidSeed {
+  familyId: number;
+  schoolYear: SchoolYear | null;
+  students: SufsStudent[];
+  /** This year's applications. */
+  applications: SufsApplication[];
+  /** Null when the family has no scholarship record for the year. */
+  scholarship: LoadedScholarship | null;
+}
+
+/**
+ * Everything the step's first paint needs, out of what SWR already
+ * holds. The header and the side nav keep the family, the years, the
+ * students, the applications and the family's scholarship row loaded.
+ * The full record is only ever asked for here, so this step puts it in
+ * the cache itself: what it loads, and each save as it goes out. Moving
+ * here from another step starts from those instead of a skeleton. Null
+ * when a piece is not there yet (the step was opened by URL, or this is
+ * the first visit to a scholarship already started) — the step then
+ * loads as before.
+ */
+function readFinancialAidSeed(
+  readCached: ApiCacheReader,
+  yearId: number
+): FinancialAidSeed | null {
+  const family = readCached<{ id?: number } | null>("/api/families");
+  const years = readCached<SchoolYear[]>("/api/school-years");
+  const students = readCached<SufsStudent[]>("/api/students");
+  const apps = readCached<SufsApplication[]>("/api/applications");
+  if (
+    !family?.id ||
+    !Array.isArray(years) ||
+    !Array.isArray(students) ||
+    !Array.isArray(apps)
+  ) {
+    return null;
+  }
+  const row = readCached<Scholarship | null>(
+    scholarshipKey(family.id, yearId)
+  );
+  // `undefined` is "not loaded yet"; `null` is "loaded, and the family
+  // has none".
+  if (row === undefined) return null;
+  let scholarship: LoadedScholarship | null = null;
+  if (row !== null) {
+    scholarship = readScholarshipRecord(
+      readCached<FullScholarshipResponse>(scholarshipRecordKey(row.id))
+    );
+    if (!scholarship) return null;
+  }
+  return {
+    familyId: family.id,
+    schoolYear: years.find((y) => y.id === yearId) ?? null,
+    students,
+    applications: apps.filter(
+      (a) => a.registration_school_years_id === yearId
+    ),
+    scholarship,
+  };
+}
+
+/** The parts of this step the parent can change, as one render had
+ *  them. */
+interface EditableState {
+  /** Every autosaved form field, as `buildSnapshot` serializes them. */
+  form: string;
+  signatureUrl: string | null;
+  choice: "none" | "snap" | "full" | null;
+  snapBenefitsFiles: Record<string, unknown>[];
+  sufsApplications: SufsApplication[];
+}
+
+/** One name for each thing a load may put on screen or leave alone:
+ *  the form's fields, and the three the parent changes outside it. */
+type RefreshField =
+  | keyof ScholarshipFormValues
+  | "scholarshipChoice"
+  | "snapBenefitsFiles"
+  | "sufsApplications";
+
+const NOTHING_CHANGED: ReadonlySet<RefreshField> = new Set();
+
+/**
+ * What the parent changed between two renders of the step. A load that
+ * comes back to a page already on screen uses it to replace only what
+ * the parent has not touched since it set out. Field by field rather
+ * than all or nothing, because the form is saved whole: a field left
+ * showing an older value would be written back over the newer one.
+ */
+function changedSince(
+  before: EditableState | null,
+  after: EditableState | null
+): ReadonlySet<RefreshField> {
+  if (!before || !after) return NOTHING_CHANGED;
+  const changed = new Set<RefreshField>();
+  if (after.form !== before.form) {
+    const was = JSON.parse(before.form) as Record<string, unknown>;
+    const now = JSON.parse(after.form) as Record<string, unknown>;
+    for (const field of Object.keys(now) as (keyof ScholarshipFormValues)[]) {
+      if (JSON.stringify(now[field]) !== JSON.stringify(was[field])) {
+        changed.add(field);
+      }
+    }
+  }
+  // A signature just drawn is on the pad before its upload comes back
+  // and sets `signatureMeta`.
+  if (after.signatureUrl !== before.signatureUrl) changed.add("signatureMeta");
+  if (after.choice !== before.choice) changed.add("scholarshipChoice");
+  if (after.snapBenefitsFiles !== before.snapBenefitsFiles) {
+    changed.add("snapBenefitsFiles");
+  }
+  if (after.sufsApplications !== before.sufsApplications) {
+    changed.add("sufsApplications");
+  }
+  return changed;
 }
 
 function formatCurrencyDisplay(value: number): string {
@@ -423,19 +744,47 @@ export function FinancialAidStep({
     trackAutosave,
   } = useApplicationFlow();
 
-  const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
-  const [scholarship, setScholarship] = useState<Scholarship | null>(null);
-  const [familyId, setFamilyId] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  // See `readFinancialAidSeed`. `loadData` still runs behind a seeded
+  // page and replaces the seed with what the server says.
+  const readCached = useApiCacheReader();
+  const [seed] = useState(() => readFinancialAidSeed(readCached, yearId));
+  // What the scholarship part of the page opens with: the cached record,
+  // or no choice and the empty form.
+  const opened: ScholarshipOnScreen = seed?.scholarship ?? NO_SCHOLARSHIP;
+
+  const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(
+    seed?.schoolYear ?? null
+  );
+  const [scholarship, setScholarship] = useState<Scholarship | null>(
+    seed?.scholarship?.row ?? null
+  );
+  const [familyId, setFamilyId] = useState<number | null>(
+    seed?.familyId ?? null
+  );
+  const [loading, setLoading] = useState(seed === null);
   // Set only when the FIRST load fails; a later failure keeps the form
   // on screen (same rule as the SWR-driven pages: only an error with
   // nothing behind it blocks the page).
   const [loadFailed, setLoadFailed] = useState(false);
-  const loadedOnceRef = useRef(false);
+  const loadedOnceRef = useRef(seed !== null);
+  // Only the newest load may apply its result.
+  const loadSeqRef = useRef(0);
+  // True on a page that opened from the cache, until the load behind it
+  // has come back. The scholarship form is saved whole, so until then it
+  // can be read but not changed or completed: a save sent from the
+  // cached copy would put its older values back over anything changed
+  // elsewhere since (a document the office uploaded for the family,
+  // say). The skeleton used to guarantee the same thing. The Award IDs
+  // and the choice of path stay live — each of those saves one field.
+  const [refreshing, setRefreshing] = useState(seed !== null);
 
   // SUFS (Step Up For Students) — per-student Award ID, stored on each yearly application
-  const [sufsStudents, setSufsStudents] = useState<SufsStudent[]>([]);
-  const [sufsApplications, setSufsApplications] = useState<SufsApplication[]>([]);
+  const [sufsStudents, setSufsStudents] = useState<SufsStudent[]>(
+    seed?.students ?? []
+  );
+  const [sufsApplications, setSufsApplications] = useState<SufsApplication[]>(
+    seed?.applications ?? []
+  );
   const [sufsSavingAppId, setSufsSavingAppId] = useState<number | null>(null);
   const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
   // Pending target when the user is switching between scholarship choices.
@@ -443,61 +792,63 @@ export function FinancialAidStep({
   // component — below the `if (loading) return …` early return it breaks Rules of Hooks.
   const [pendingSwitchTo, setPendingSwitchTo] = useState<"none" | "snap" | "full" | null>(null);
   const [saving, setSaving] = useState(false);
-  const [scholarshipChoice, setScholarshipChoice] = useState<"none" | "snap" | "full" | null>(null);
+  const [scholarshipChoice, setScholarshipChoice] = useState<"none" | "snap" | "full" | null>(opened.choice);
   const [notParticipatingConfirm, setNotParticipatingConfirm] = useState(false);
   const [snapModalOpen, setSnapModalOpen] = useState(false);
   const [resetChoiceConfirm, setResetChoiceConfirm] = useState(false);
 
-  const [members, setMembers] = useState<ContributingMember[]>([]);
-  const [homes, setHomes] = useState<Home[]>([]);
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [benefits, setBenefits] = useState<Benefit[]>([]);
+  // The form's fields each start from `opened.form`: the cached record
+  // when the step opened from the cache, otherwise the empty form.
+  const [members, setMembers] = useState<ContributingMember[]>(opened.form.members);
+  const [homes, setHomes] = useState<Home[]>(opened.form.homes);
+  const [vehicles, setVehicles] = useState<Vehicle[]>(opened.form.vehicles);
+  const [benefits, setBenefits] = useState<Benefit[]>(opened.form.benefits);
 
-  const [householdAdults, setHouseholdAdults] = useState(0);
-  const [householdChildren, setHouseholdChildren] = useState(0);
-  const [noContributing, setNoContributing] = useState(false);
+  const [householdAdults, setHouseholdAdults] = useState(opened.form.householdAdults);
+  const [householdChildren, setHouseholdChildren] = useState(opened.form.householdChildren);
+  const [noContributing, setNoContributing] = useState(opened.form.noContributing);
 
   // Monetary state defaults to null ("untouched") so the
   // placeholder is shown until the family explicitly types a
   // value. A typed `0` is preserved as `0` and saved as `0` —
   // distinct from null so admin can tell "didn't fill in this
   // field" apart from "confirmed no income from this source."
-  const [businessIncome, setBusinessIncome] = useState<number | null>(null);
-  const [capitalGains, setCapitalGains] = useState<number | null>(null);
-  const [childSupport, setChildSupport] = useState<number | null>(null);
-  const [alimony, setAlimony] = useState<number | null>(null);
-  const [trustsIncome, setTrustsIncome] = useState<number | null>(null);
-  const [otherIncome, setOtherIncome] = useState<number | null>(null);
-  const [describeOtherIncome, setDescribeOtherIncome] = useState("");
+  const [businessIncome, setBusinessIncome] = useState<number | null>(opened.form.businessIncome);
+  const [capitalGains, setCapitalGains] = useState<number | null>(opened.form.capitalGains);
+  const [childSupport, setChildSupport] = useState<number | null>(opened.form.childSupport);
+  const [alimony, setAlimony] = useState<number | null>(opened.form.alimony);
+  const [trustsIncome, setTrustsIncome] = useState<number | null>(opened.form.trustsIncome);
+  const [otherIncome, setOtherIncome] = useState<number | null>(opened.form.otherIncome);
+  const [describeOtherIncome, setDescribeOtherIncome] = useState(opened.form.describeOtherIncome);
 
-  const [assetsChecking, setAssetsChecking] = useState<number | null>(null);
-  const [assetsSavings, setAssetsSavings] = useState<number | null>(null);
-  const [assetsRetirement, setAssetsRetirement] = useState<number | null>(null);
-  const [assetsStocks, setAssetsStocks] = useState<number | null>(null);
-  const [assetsTrusts, setAssetsTrusts] = useState<number | null>(null);
-  const [assetsBusiness, setAssetsBusiness] = useState<number | null>(null);
+  const [assetsChecking, setAssetsChecking] = useState<number | null>(opened.form.assetsChecking);
+  const [assetsSavings, setAssetsSavings] = useState<number | null>(opened.form.assetsSavings);
+  const [assetsRetirement, setAssetsRetirement] = useState<number | null>(opened.form.assetsRetirement);
+  const [assetsStocks, setAssetsStocks] = useState<number | null>(opened.form.assetsStocks);
+  const [assetsTrusts, setAssetsTrusts] = useState<number | null>(opened.form.assetsTrusts);
+  const [assetsBusiness, setAssetsBusiness] = useState<number | null>(opened.form.assetsBusiness);
 
-  const [debtsCreditCards, setDebtsCreditCards] = useState<number | null>(null);
-  const [debtsStudentLoans, setDebtsStudentLoans] = useState<number | null>(null);
-  const [debtsPersonalLoans, setDebtsPersonalLoans] = useState<number | null>(null);
+  const [debtsCreditCards, setDebtsCreditCards] = useState<number | null>(opened.form.debtsCreditCards);
+  const [debtsStudentLoans, setDebtsStudentLoans] = useState<number | null>(opened.form.debtsStudentLoans);
+  const [debtsPersonalLoans, setDebtsPersonalLoans] = useState<number | null>(opened.form.debtsPersonalLoans);
 
-  const [govBenefits, setGovBenefits] = useState(false);
-  const [familyContribution, setFamilyContribution] = useState<number | null>(null);
-  const [advocacyLetter, setAdvocacyLetter] = useState("");
-  const [fullNameSignature, setFullNameSignature] = useState("");
-  const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
-  const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(null);
+  const [govBenefits, setGovBenefits] = useState(opened.form.govBenefits);
+  const [familyContribution, setFamilyContribution] = useState<number | null>(opened.form.familyContribution);
+  const [advocacyLetter, setAdvocacyLetter] = useState(opened.form.advocacyLetter);
+  const [fullNameSignature, setFullNameSignature] = useState(opened.form.fullNameSignature);
+  const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(opened.form.signatureMeta);
+  const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(opened.signatureUrl);
   const [signatureUploading, setSignatureUploading] = useState(false);
-  const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>([]);
-  const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>([]);
-  const [unemploymentLetter, setUnemploymentLetter] = useState<Record<string, unknown>[]>([]);
+  const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>(opened.snapBenefitsFiles);
+  const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>(opened.otherBenefitsFiles);
+  const [unemploymentLetter, setUnemploymentLetter] = useState<Record<string, unknown>[]>(opened.form.unemploymentLetter);
   // Prior-year federal tax return — required on the Opportunity
   // Scholarship path. Multi-file because the 1040 + supporting
   // schedules typically split across several PDFs. Hydrated from
   // `scholarship.tax_return` and saved back on every autosave; admin
   // can also upload on behalf of the family from the Documents to
   // Review block on the admin family detail page.
-  const [taxReturnFiles, setTaxReturnFiles] = useState<Record<string, unknown>[]>([]);
+  const [taxReturnFiles, setTaxReturnFiles] = useState<Record<string, unknown>[]>(opened.form.taxReturnFiles);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, setTick] = useState(0);
   const savedSnapshotRef = useRef<string>("");
@@ -632,7 +983,9 @@ export function FinancialAidStep({
       govBenefits, familyContribution, advocacyLetter, fullNameSignature,
       signatureMeta, unemploymentLetter, taxReturnFiles,
       members, homes, vehicles, benefits,
-    });
+      // Type check only: a load tells what the parent changed by these
+      // names (see `changedSince`), so they have to stay the form's own.
+    } satisfies ScholarshipFormValues);
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -653,8 +1006,39 @@ export function FinancialAidStep({
     savedSnapshotRef.current = buildSnapshot();
   }
 
-  const loadData = useCallback(async () => {
+  // What the parent can change on this step, as of the last render. A
+  // load compares what is here when it comes back with what was here
+  // when it set out (see `changedSince`).
+  const editableRef = useRef<EditableState | null>(null);
+  useEffect(() => {
+    editableRef.current = {
+      form: currentSnapshotMemo,
+      signatureUrl: signatureLocalUrl,
+      choice: scholarshipChoice,
+      snapBenefitsFiles,
+      sufsApplications,
+    };
+  }, [
+    currentSnapshotMemo,
+    signatureLocalUrl,
+    scholarshipChoice,
+    snapBenefitsFiles,
+    sufsApplications,
+  ]);
+
+  // `background` is the load that runs behind a page already on screen
+  // (the one on arrival, when the step opened from the cache). It leaves
+  // alone whatever the parent has changed since it set out; "Try again"
+  // always applies in full, as it always has.
+  const loadData = useCallback(async (opts?: { background?: boolean }) => {
+    const seq = ++loadSeqRef.current;
+    const atStart = editableRef.current;
     try {
+      // A save from a moment ago (the one sent on the way out of this
+      // step last visit, or a student just added on the Students step)
+      // has to land first, or this read can come back without it and
+      // show the old values.
+      await stepSavesSettled();
       // `apiFetch` retries a 401 once after refreshing the Clerk token
       // (a cold load can race that refresh). Any other non-2xx used to
       // be skipped silently, which rendered an empty, saveable form —
@@ -668,135 +1052,120 @@ export function FinancialAidStep({
         loadedOnceRef.current = true;
         return;
       }
-      setFamilyId(familyData.id);
 
+      const rowKey = scholarshipKey(familyData.id, yearId);
       const [yearRes, scholarshipRes, studentsRes, appsRes] = await Promise.all([
         apiFetch("/api/school-years"),
-        apiFetch(`/api/scholarship?familyId=${familyData.id}&yearId=${yearId}`),
+        apiFetch(rowKey),
         apiFetch("/api/students"),
         apiFetch("/api/applications"),
       ]);
       for (const res of [yearRes, scholarshipRes, studentsRes, appsRes]) {
         if (!res.ok) throw new Error(`API error ${res.status}`);
       }
-
-      if (studentsRes.ok) {
-        setSufsStudents(await studentsRes.json());
+      const years: SchoolYear[] = await yearRes.json();
+      const row: Scholarship | null = await scholarshipRes.json();
+      const allStudents: SufsStudent[] = await studentsRes.json();
+      const allApps: SufsApplication[] = await appsRes.json();
+      let record: FullScholarshipResponse | null = null;
+      if (row) {
+        const fullRes = await apiFetch(scholarshipRecordKey(row.id));
+        if (!fullRes.ok) throw new Error(`API error ${fullRes.status}`);
+        record = await fullRes.json();
       }
-      if (appsRes.ok) {
-        const allApps: SufsApplication[] = await appsRes.json();
+      // A newer load started while this one was out; it decides.
+      if (seq !== loadSeqRef.current) return;
+
+      // Everything is applied from here down in one go, so what the
+      // parent changed is judged at the moment it is replaced. Only a
+      // load behind a page already on screen has anything to respect.
+      const changed =
+        opts?.background === true && loadedOnceRef.current
+          ? changedSince(atStart, editableRef.current)
+          : NOTHING_CHANGED;
+      const keepSufs = changed.has("sufsApplications");
+      // The choice, the SNAP letter or a field of the form.
+      const keepSomeOfScholarship = changed.size > (keepSufs ? 1 : 0);
+
+      // The parent only reads these here, so they always take the
+      // server's answer.
+      setFamilyId(familyData.id);
+      setSchoolYear(years.find((y) => y.id === yearId) ?? null);
+      setSufsStudents(allStudents);
+      if (!keepSufs) {
         setSufsApplications(allApps.filter((a) => a.registration_school_years_id === yearId));
       }
 
-      if (yearRes.ok) {
-        const years: SchoolYear[] = await yearRes.json();
-        setSchoolYear(years.find((y) => y.id === yearId) ?? null);
+      const loaded = row ? readScholarshipRecord(record) : null;
+
+      // Hand the fresh copies to SWR too: they are what this step (and
+      // the header and side nav) start from next time. An entry the
+      // parent has changed since this load set out is left alone — the
+      // cache already carries that change (each save here writes it in
+      // as it goes out), and this copy may predate it.
+      void mutate("/api/students", allStudents, { revalidate: false });
+      if (!keepSufs) {
+        void mutate("/api/applications", allApps, { revalidate: false });
+      }
+      if (!keepSomeOfScholarship) {
+        void mutate(rowKey, row, { revalidate: false });
+        if (row && loaded) {
+          void mutate(scholarshipRecordKey(row.id), record, {
+            revalidate: false,
+          });
+        }
       }
 
-      if (scholarshipRes.ok) {
-        const data: Scholarship | null = await scholarshipRes.json();
-        if (data) {
-          const fullRes = await apiFetch(`/api/scholarship/${data.id}`);
-          if (!fullRes.ok) throw new Error(`API error ${fullRes.status}`);
-          if (fullRes.ok) {
-            const resp: FullScholarshipResponse = await fullRes.json();
-            const s = resp?.opportunity_scholarship;
-            // Xano occasionally returns the wrapper without the joined
-            // `opportunity_scholarship` row (e.g. the scholarship_id
-            // points at a deleted row, or the addon expansion fails).
-            // Bail rather than crashing with
-            // `Cannot read properties of undefined (reading 'household_adults')`.
-            if (!s) {
-              loadedOnceRef.current = true;
-              setLoading(false);
-              return;
-            }
-            setScholarship(s);
-            populateForm(s);
-            if (s.isNotParticipating) {
-              setScholarshipChoice("none");
-            } else if (s.isSNAPBenefits) {
-              setScholarshipChoice("snap");
-            } else if (s.isOpportunityScholarship) {
-              setScholarshipChoice("full");
-            }
-            // Coerce to arrays defensively — a non-array child (e.g. a
-            // single object from a Xano expansion quirk) would otherwise
-            // slip past `?? []` and throw on `.map()`, blanking the page.
-            const loadedMembers = Array.isArray(resp.contributing_members)
-              ? resp.contributing_members
-              : [];
-            const loadedHomes = Array.isArray(resp.homes) ? resp.homes : [];
-            const loadedVehicles = Array.isArray(resp.vehicles)
-              ? resp.vehicles
-              : [];
-            const loadedBenefits = Array.isArray(resp.benefits)
-              ? resp.benefits
-              : [];
-            setMembers(loadedMembers);
-            setHomes(loadedHomes);
-            setVehicles(loadedVehicles);
-            setBenefits(loadedBenefits);
-            // Monetary fields pass null through to the snapshot
-            // so the dirty-check below can distinguish "untouched
-            // since hydrate" from "user typed and then cleared back
-            // to empty" later in the session. Counts + booleans
-            // still coerce to 0 / false defaults since they don't
-            // have a meaningful null state on this surface.
-            initialSnapshotRef.current = JSON.stringify({
-              householdAdults: s.household_adults ?? 0,
-              householdChildren: s.household_children ?? 0,
-              noContributing: s.no_contributing_member ?? false,
-              businessIncome: s.business_income_monthly ?? null,
-              capitalGains: s.capital_gains_monthly ?? null,
-              childSupport: s.child_support_monthly ?? null,
-              alimony: s.alimony_monthly ?? null,
-              trustsIncome: s.trusts_monthly ?? null,
-              otherIncome: s.other_income_monthly ?? null,
-              describeOtherIncome: s.describe_other_income ?? "",
-              assetsChecking: s.assets_checking ?? null,
-              assetsSavings: s.assets_savings ?? null,
-              assetsRetirement: s.assets_retirement_savings ?? null,
-              assetsStocks: s.assets_stocks_bonds_securities ?? null,
-              assetsTrusts: s.assets_trusts_inheritance ?? null,
-              assetsBusiness: s.assets_business ?? null,
-              debtsCreditCards: s.debts_credit_cards ?? null,
-              debtsStudentLoans: s.debts_student_loans ?? null,
-              debtsPersonalLoans: s.debts_personal_loans ?? null,
-              govBenefits: s.government_benefits ?? false,
-              familyContribution: s.family_contribution_per_month ?? null,
-              advocacyLetter: s.scholarship_advocacy_letter ?? "",
-              fullNameSignature: s.full_name_signature ?? "",
-              signatureMeta: (() => {
-                if (!s.signature) return null;
-                let sig: Record<string, unknown>;
-                if (typeof s.signature === "string") {
-                  try { sig = JSON.parse(s.signature); } catch { sig = {}; }
-                } else {
-                  sig = s.signature as Record<string, unknown>;
-                }
-                return Object.keys(sig).length > 0 ? sig : null;
-              })(),
-              unemploymentLetter: Array.isArray(s.unemployment_letter)
-                ? s.unemployment_letter
-                : [],
-              members: loadedMembers,
-              homes: loadedHomes,
-              vehicles: loadedVehicles,
-              benefits: loadedBenefits,
-            });
-          }
+      if (row) {
+        // Xano occasionally returns the wrapper without the joined
+        // `opportunity_scholarship` row (e.g. the scholarship_id
+        // points at a deleted row, or the addon expansion fails).
+        // Bail rather than crashing with
+        // `Cannot read properties of undefined (reading 'household_adults')`.
+        if (!loaded) {
+          loadedOnceRef.current = true;
+          return;
+        }
+        const s = loaded.row;
+        setScholarship(s);
+        populateForm(loaded, changed);
+        // The autosave's baseline: the record exactly as it was just
+        // loaded, serialized the way `buildSnapshot` serializes the
+        // form (`loaded.form` carries the same fields in the same
+        // order, and `satisfies ScholarshipFormValues` there keeps the
+        // two from drifting). Monetary fields stay null when Xano
+        // returns null, so "untouched" and "typed, then cleared" remain
+        // different.
+        //
+        // This used to be a second, hand-written copy of that list, and
+        // it had fallen behind: it had no `taxReturnFiles`. So the form
+        // never matched its own baseline, every record read as edited
+        // the moment it loaded, and the whole form was saved again four
+        // seconds after each visit (or on leaving), unchanged.
+        initialSnapshotRef.current = JSON.stringify(loaded.form);
+        // On a first load the effect below makes this the autosave's
+        // baseline when `loading` clears. A page already on screen has
+        // no such moment, so it moves here: what the parent changed
+        // meanwhile then differs from it, and is saved.
+        if (loadedOnceRef.current) {
+          savedSnapshotRef.current = initialSnapshotRef.current;
         }
       }
       loadedOnceRef.current = true;
       setLoadFailed(false);
     } catch (err) {
       console.error("Failed to load:", err);
-      if (!loadedOnceRef.current) setLoadFailed(true);
+      if (seq === loadSeqRef.current && !loadedOnceRef.current) {
+        setLoadFailed(true);
+      }
     } finally {
-      setLoading(false);
+      // An overtaken load leaves the skeleton to the one that replaced it.
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [yearId]);
+  }, [yearId, mutate]);
 
   // Local edit handler — updates state immediately so users see their typing.
   // SUFS Award IDs are 9-digit numeric codes issued by Step Up For Students.
@@ -813,17 +1182,38 @@ export function FinancialAidStep({
     const app = sufsApplications.find((a) => a.id === appId);
     if (!app) return;
     setSufsSavingAppId(appId);
-    try {
-      await trackAutosave(
-        fetch(`/api/applications/${appId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sufs_award_id: app.sufs_award_id ?? 0 }),
-        }).then(async (res) => {
-          if (!res.ok) throw new Error(`Save failed (${res.status})`);
-          return res;
-        })
+    const awardId = app.sufs_award_id ?? 0;
+    // The cached applications get the Award ID straight away, so leaving
+    // the step and coming back shows it; a save that fails refetches the
+    // list, putting back what the server has.
+    const applyToCache = () =>
+      void mutate(
+        "/api/applications",
+        (curr: SufsApplication[] | undefined) =>
+          Array.isArray(curr)
+            ? curr.map((a) =>
+                a.id === appId ? { ...a, sufs_award_id: awardId } : a
+              )
+            : curr,
+        { revalidate: false }
       );
+    applyToCache();
+    const request = fetch(`/api/applications/${appId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sufs_award_id: awardId }),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      return res;
+    });
+    request.catch(() => void mutate("/api/applications"));
+    // Registered so the next load (here or on another step) waits for it.
+    trackStepSave(request);
+    try {
+      await trackAutosave(request);
+      // Once more now that it is saved: the 30-second refetch of the
+      // list may have overlapped the save and put the old row back.
+      applyToCache();
     } catch (err) {
       console.error("Failed to save SUFS Award ID:", err);
     } finally {
@@ -831,67 +1221,57 @@ export function FinancialAidStep({
     }
   }
 
-  function populateForm(s: Scholarship) {
-    setHouseholdAdults(s.household_adults ?? 0);
-    setHouseholdChildren(s.household_children ?? 0);
-    setNoContributing(s.no_contributing_member ?? false);
-    // Monetary fields hydrate as null when Xano returns null —
-    // preserves the "untouched" placeholder state. A real zero
-    // saved by the family round-trips back as `0`.
-    setBusinessIncome(s.business_income_monthly ?? null);
-    setCapitalGains(s.capital_gains_monthly ?? null);
-    setChildSupport(s.child_support_monthly ?? null);
-    setAlimony(s.alimony_monthly ?? null);
-    setTrustsIncome(s.trusts_monthly ?? null);
-    setOtherIncome(s.other_income_monthly ?? null);
-    setDescribeOtherIncome(s.describe_other_income ?? "");
-    setAssetsChecking(s.assets_checking ?? null);
-    setAssetsSavings(s.assets_savings ?? null);
-    setAssetsRetirement(s.assets_retirement_savings ?? null);
-    setAssetsStocks(s.assets_stocks_bonds_securities ?? null);
-    setAssetsTrusts(s.assets_trusts_inheritance ?? null);
-    setAssetsBusiness(s.assets_business ?? null);
-    setDebtsCreditCards(s.debts_credit_cards ?? null);
-    setDebtsStudentLoans(s.debts_student_loans ?? null);
-    setDebtsPersonalLoans(s.debts_personal_loans ?? null);
-    setGovBenefits(s.government_benefits ?? false);
-    setFamilyContribution(s.family_contribution_per_month ?? null);
-    setAdvocacyLetter(s.scholarship_advocacy_letter ?? "");
-    setFullNameSignature(s.full_name_signature ?? "");
-    if (s.last_edited) setLastSaved(new Date(s.last_edited));
-    if (s.signature) {
-      let sig: Record<string, unknown>;
-      if (typeof s.signature === "string") {
-        try { sig = JSON.parse(s.signature); } catch { sig = {}; }
-      } else {
-        sig = s.signature as Record<string, unknown>;
-      }
-      if (Object.keys(sig).length > 0) {
-        setSignatureMeta(sig);
-        if (typeof sig.url === "string") {
-          setSignatureLocalUrl(sig.url);
-        } else if (typeof sig.path === "string") {
-          const base = process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
-          setSignatureLocalUrl(`${base}${sig.path}`);
-        }
-      }
+  // Put a loaded record on screen. `changed` names what the parent has
+  // changed while the load was out (nothing, for a load that had the
+  // skeleton up); those stay as they are.
+  function populateForm(
+    loaded: LoadedScholarship,
+    changed: ReadonlySet<RefreshField>
+  ) {
+    const v = loaded.form;
+    const take = (field: RefreshField) => !changed.has(field);
+    if (take("householdAdults")) setHouseholdAdults(v.householdAdults);
+    if (take("householdChildren")) setHouseholdChildren(v.householdChildren);
+    if (take("noContributing")) setNoContributing(v.noContributing);
+    if (take("businessIncome")) setBusinessIncome(v.businessIncome);
+    if (take("capitalGains")) setCapitalGains(v.capitalGains);
+    if (take("childSupport")) setChildSupport(v.childSupport);
+    if (take("alimony")) setAlimony(v.alimony);
+    if (take("trustsIncome")) setTrustsIncome(v.trustsIncome);
+    if (take("otherIncome")) setOtherIncome(v.otherIncome);
+    if (take("describeOtherIncome")) setDescribeOtherIncome(v.describeOtherIncome);
+    if (take("assetsChecking")) setAssetsChecking(v.assetsChecking);
+    if (take("assetsSavings")) setAssetsSavings(v.assetsSavings);
+    if (take("assetsRetirement")) setAssetsRetirement(v.assetsRetirement);
+    if (take("assetsStocks")) setAssetsStocks(v.assetsStocks);
+    if (take("assetsTrusts")) setAssetsTrusts(v.assetsTrusts);
+    if (take("assetsBusiness")) setAssetsBusiness(v.assetsBusiness);
+    if (take("debtsCreditCards")) setDebtsCreditCards(v.debtsCreditCards);
+    if (take("debtsStudentLoans")) setDebtsStudentLoans(v.debtsStudentLoans);
+    if (take("debtsPersonalLoans")) setDebtsPersonalLoans(v.debtsPersonalLoans);
+    if (take("govBenefits")) setGovBenefits(v.govBenefits);
+    if (take("familyContribution")) setFamilyContribution(v.familyContribution);
+    if (take("advocacyLetter")) setAdvocacyLetter(v.advocacyLetter);
+    if (take("fullNameSignature")) setFullNameSignature(v.fullNameSignature);
+    if (loaded.row.last_edited) setLastSaved(new Date(loaded.row.last_edited));
+    if (take("signatureMeta")) {
+      setSignatureMeta(v.signatureMeta);
+      setSignatureLocalUrl(loaded.signatureUrl);
     }
-    if (Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0) {
-      setSnapBenefitsFiles(s.snap_benefits as Record<string, unknown>[]);
-    }
-    if (Array.isArray(s.other_benefits) && s.other_benefits.length > 0) {
-      setOtherBenefitsFiles(s.other_benefits as Record<string, unknown>[]);
-    }
-    if (Array.isArray(s.unemployment_letter)) {
-      setUnemploymentLetter(s.unemployment_letter as Record<string, unknown>[]);
-    }
-    if (Array.isArray(s.tax_return)) {
-      setTaxReturnFiles(s.tax_return as Record<string, unknown>[]);
-    }
+    if (take("unemploymentLetter")) setUnemploymentLetter(v.unemploymentLetter);
+    if (take("taxReturnFiles")) setTaxReturnFiles(v.taxReturnFiles);
+    if (take("members")) setMembers(v.members);
+    if (take("homes")) setHomes(v.homes);
+    if (take("vehicles")) setVehicles(v.vehicles);
+    if (take("benefits")) setBenefits(v.benefits);
+    if (take("scholarshipChoice")) setScholarshipChoice(loaded.choice);
+    if (take("snapBenefitsFiles")) setSnapBenefitsFiles(loaded.snapBenefitsFiles);
+    // Nothing on this step changes these; the server's copy always wins.
+    setOtherBenefitsFiles(loaded.otherBenefitsFiles);
   }
 
   useEffect(() => {
-    loadData();
+    loadData({ background: true });
   }, [loadData]);
 
   useEffect(() => {
@@ -899,6 +1279,18 @@ export function FinancialAidStep({
       savedSnapshotRef.current = initialSnapshotRef.current;
     }
   }, [loading]);
+
+  // Opened from the cache with the scholarship already on screen: that
+  // copy is what this step last loaded or sent, so it is the autosave's
+  // baseline until the load behind it comes back. Nothing is waiting to
+  // be saved, and the parent's first edit is. (Without a baseline the
+  // autosave stays off, as it does on a page still loading.) Set once:
+  // after that the ref is never empty again.
+  useEffect(() => {
+    if (seed?.scholarship && savedSnapshotRef.current === "") {
+      savedSnapshotRef.current = currentSnapshotMemo;
+    }
+  }, [seed, currentSnapshotMemo]);
 
   useEffect(() => {
     if (!lastSaved) return;
@@ -966,21 +1358,105 @@ export function FinancialAidStep({
 
   // Keep all sections open — no auto-collapse on completion
 
+  /**
+   * Apply a change to the cached copy of a scholarship record (see
+   * `readFinancialAidSeed`). The next visit to this step opens from that
+   * copy, so everything this step sends is written into it as it goes
+   * out — a save is often still on the wire when the parent moves on.
+   * Does nothing while there is no cached copy to change.
+   */
+  function updateCachedRecord(
+    id: number,
+    update: (record: FullScholarshipResponse) => FullScholarshipResponse
+  ) {
+    void mutate(
+      scholarshipRecordKey(id),
+      (curr: FullScholarshipResponse | undefined) =>
+        curr?.opportunity_scholarship ? update(curr) : curr,
+      { revalidate: false }
+    );
+  }
+
+  /** The same, for fields of the record's own row. */
+  function updateCachedRow(id: number, fields: Partial<Scholarship>) {
+    updateCachedRecord(id, (record) => ({
+      ...record,
+      opportunity_scholarship: { ...record.opportunity_scholarship, ...fields },
+    }));
+  }
+
+  /**
+   * For a write that the cached copy of the record already carries (see
+   * `updateCachedRecord`):
+   *   - `trackStepSave` lets the next load (here or on another step)
+   *     wait for it while it is still on the wire;
+   *   - if it fails, or the server refuses it, the cached copy is
+   *     dropped. Nothing else refetches that entry, so the next visit
+   *     loads it from the server behind the skeleton, as a first visit
+   *     does, instead of opening from a copy the server never accepted.
+   * Returns `save` unchanged.
+   */
+  function trackRecordSave<T>(
+    id: number | null | undefined,
+    save: Promise<T>
+  ): Promise<T> {
+    const dropCachedRecord = () => {
+      if (id) {
+        void mutate(scholarshipRecordKey(id), undefined, { revalidate: false });
+      }
+    };
+    void save.then((result) => {
+      if (result instanceof Response && !result.ok) dropCachedRecord();
+    }, dropCachedRecord);
+    return trackStepSave(save);
+  }
+
   async function ensureScholarship(): Promise<number | null> {
     if (scholarship) return scholarship.id;
     if (!familyId) return null;
 
-    const res = await fetch("/api/scholarship", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        registration_families_id: familyId,
-        registration_school_years_id: yearId,
-      }),
-    });
+    const res = await trackStepSave(
+      fetch("/api/scholarship", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          registration_families_id: familyId,
+          registration_school_years_id: yearId,
+        }),
+      })
+    );
     if (!res.ok) return null;
     const data = await res.json();
     setScholarship(data);
+    // A record created on this visit has nothing loaded to compare the
+    // form against, so the autosave had no baseline and stayed off:
+    // what a family typed the first time they opened the scholarship
+    // form was only ever saved by pressing Complete, and was lost if
+    // they left the step first. The form as it stands is what the new
+    // record holds (nothing yet), so that is the baseline, and the next
+    // edit is saved like any other.
+    if (savedSnapshotRef.current === "") captureSnapshot();
+    // The cached row still says the family has no record. The side nav
+    // reads it for "started", and the next visit here finds the record
+    // by it.
+    void mutate(scholarshipKey(familyId, yearId), data, { revalidate: false });
+    // 201 is a record just created, so it has no members, homes,
+    // vehicles or benefits yet and the whole of it is known. A 200 is
+    // one that already existed: its child rows are not in this
+    // response, so no copy is cached and the next visit loads it.
+    if (res.status === 201) {
+      void mutate(
+        scholarshipRecordKey(data.id),
+        {
+          opportunity_scholarship: data,
+          homes: [],
+          vehicles: [],
+          contributing_members: [],
+          benefits: [],
+        } satisfies FullScholarshipResponse,
+        { revalidate: false }
+      );
+    }
     return data.id;
   }
 
@@ -991,44 +1467,45 @@ export function FinancialAidStep({
       const sid = await ensureScholarship();
       if (!sid) return;
 
+      const scholarshipFields = {
+        household_adults: householdAdults,
+        household_children: householdChildren,
+        no_contributing_member: noContributing,
+        business_income_monthly: businessIncome,
+        capital_gains_monthly: capitalGains,
+        child_support_monthly: childSupport,
+        alimony_monthly: alimony,
+        trusts_monthly: trustsIncome,
+        other_income_monthly: otherIncome,
+        describe_other_income: describeOtherIncome,
+        assets_checking: assetsChecking,
+        assets_savings: assetsSavings,
+        assets_retirement_savings: assetsRetirement,
+        assets_stocks_bonds_securities: assetsStocks,
+        assets_trusts_inheritance: assetsTrusts,
+        assets_business: assetsBusiness,
+        debts_credit_cards: debtsCreditCards,
+        debts_student_loans: debtsStudentLoans,
+        debts_personal_loans: debtsPersonalLoans,
+        government_benefits: govBenefits,
+        family_contribution_per_month: familyContribution,
+        scholarship_advocacy_letter: advocacyLetter,
+        full_name_signature: fullNameSignature,
+        snap_benefits: snapBenefitsFiles,
+        other_benefits: otherBenefitsFiles,
+        signature: signatureMeta,
+        unemployment_letter: unemploymentLetter,
+        // Prior-year tax return — required on the Opportunity
+        // Scholarship path. Multi-file (1040 + schedules + W-2s
+        // etc.). The Opportunity Scholarship "ready to submit"
+        // gate enforces at least one file uploaded.
+        tax_return: taxReturnFiles,
+        last_edited: Date.now(),
+      };
       const scholarshipPatch = fetch(`/api/scholarship/${sid}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          household_adults: householdAdults,
-          household_children: householdChildren,
-          no_contributing_member: noContributing,
-          business_income_monthly: businessIncome,
-          capital_gains_monthly: capitalGains,
-          child_support_monthly: childSupport,
-          alimony_monthly: alimony,
-          trusts_monthly: trustsIncome,
-          other_income_monthly: otherIncome,
-          describe_other_income: describeOtherIncome,
-          assets_checking: assetsChecking,
-          assets_savings: assetsSavings,
-          assets_retirement_savings: assetsRetirement,
-          assets_stocks_bonds_securities: assetsStocks,
-          assets_trusts_inheritance: assetsTrusts,
-          assets_business: assetsBusiness,
-          debts_credit_cards: debtsCreditCards,
-          debts_student_loans: debtsStudentLoans,
-          debts_personal_loans: debtsPersonalLoans,
-          government_benefits: govBenefits,
-          family_contribution_per_month: familyContribution,
-          scholarship_advocacy_letter: advocacyLetter,
-          full_name_signature: fullNameSignature,
-          snap_benefits: snapBenefitsFiles,
-          other_benefits: otherBenefitsFiles,
-          signature: signatureMeta,
-          unemployment_letter: unemploymentLetter,
-          // Prior-year tax return — required on the Opportunity
-          // Scholarship path. Multi-file (1040 + schedules + W-2s
-          // etc.). The Opportunity Scholarship "ready to submit"
-          // gate enforces at least one file uploaded.
-          tax_return: taxReturnFiles,
-          last_edited: Date.now(),
-        }),
+        body: JSON.stringify(scholarshipFields),
       });
 
       // Skip members whose `id` is missing — the autosave shouldn't
@@ -1124,19 +1601,36 @@ export function FinancialAidStep({
         })
       );
 
+      // The cached copy of the record gets what is being sent, as it is
+      // sent: this is the save that goes out when the parent leaves the
+      // step, and coming back has to show it.
+      updateCachedRecord(sid, (record) => ({
+        opportunity_scholarship: {
+          ...record.opportunity_scholarship,
+          ...scholarshipFields,
+        },
+        contributing_members: members,
+        homes,
+        vehicles,
+        benefits,
+      }));
+
       const [scholarshipRes] = await trackAutosave(
-        Promise.all([
-          scholarshipPatch,
-          ...memberPatches,
-          ...homePatches,
-          ...vehiclePatches,
-          ...benefitPatches,
-        ]).then((results) => {
-          // Surface any failed PATCH so the badge goes red and errors aren't silent.
-          const failed = results.find((r) => !r.ok);
-          if (failed) throw new Error(`Save failed (${failed.status})`);
-          return results;
-        })
+        trackRecordSave(
+          sid,
+          Promise.all([
+            scholarshipPatch,
+            ...memberPatches,
+            ...homePatches,
+            ...vehiclePatches,
+            ...benefitPatches,
+          ]).then((results) => {
+            // Surface any failed PATCH so the badge goes red and errors aren't silent.
+            const failed = results.find((r) => !r.ok);
+            if (failed) throw new Error(`Save failed (${failed.status})`);
+            return results;
+          })
+        )
       );
 
       if (scholarshipRes.ok) {
@@ -1238,11 +1732,15 @@ export function FinancialAidStep({
         completed: false,
         onUnlock: undefined,
         saving,
-        disabled: !hasValidChoice || saving,
+        // `refreshing`: completing saves the whole form, so it waits for
+        // the load behind a page opened from the cache (see the state).
+        // The button was just as unavailable behind the skeleton, which
+        // had no choice to show yet.
+        disabled: !hasValidChoice || saving || refreshing,
         label: "Complete Financial Aid Section",
       });
     }
-  }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions, setScholarshipLocked]);
+  }, [saving, refreshing, scholarshipChoice, scholarshipLocked, updateSaveOptions, setScholarshipLocked]);
 
   // Section unlock when a new student is added is now handled inline
   // by the Students page's `handleAddToYear` (it PATCHes the relevant
@@ -1315,11 +1813,16 @@ export function FinancialAidStep({
         );
         return;
       }
-      const res = await fetch(`/api/scholarship/${sid}/contributing-members`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
+      // Adding a row is a write like any other: registered so a load
+      // that starts while it is out waits for it (and then includes the
+      // new row). The same goes for homes, vehicles and benefits below.
+      const res = await trackStepSave(
+        fetch(`/api/scholarship/${sid}/contributing-members`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        })
+      );
       if (!res.ok) {
         // Surface the real Xano/route error so a silent backend
         // rejection (e.g. schema-required field added on Xano) is
@@ -1334,6 +1837,12 @@ export function FinancialAidStep({
       }
       const created = await res.json();
       setMembers([...members, created]);
+      // The cached record gets the new row too, so a visit that opens
+      // from it has the same members the server does.
+      updateCachedRecord(sid, (record) => ({
+        ...record,
+        contributing_members: [...record.contributing_members, created],
+      }));
     } catch (err) {
       console.error("[addMember] threw:", err);
       toast.error(
@@ -1344,11 +1853,27 @@ export function FinancialAidStep({
     }
   }
 
+  // A removed row leaves the cached record as it leaves the page, so a
+  // visit that opens from the cache does not bring it back. The DELETE
+  // goes through `trackRecordSave` so the load behind that visit waits
+  // for it — a read that beat it would show the row again and then
+  // fail to save it. The same goes for homes, vehicles and benefits.
   function deleteMember(id: number) {
     setMembers((prev) => prev.filter((m) => m.id !== id));
-    fetch(`/api/scholarship-items/contributing-members/${id}`, {
-      method: "DELETE",
-    }).catch((err) => console.error("Failed to delete member:", err));
+    if (scholarship) {
+      updateCachedRecord(scholarship.id, (record) => ({
+        ...record,
+        contributing_members: record.contributing_members.filter(
+          (m) => m.id !== id
+        ),
+      }));
+    }
+    trackRecordSave(
+      scholarship?.id,
+      fetch(`/api/scholarship-items/contributing-members/${id}`, {
+        method: "DELETE",
+      })
+    ).catch((err) => console.error("Failed to delete member:", err));
   }
 
   async function addHome() {
@@ -1356,12 +1881,21 @@ export function FinancialAidStep({
     try {
       const sid = await ensureScholarship();
       if (!sid) return;
-      const res = await fetch(`/api/scholarship/${sid}/homes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) setHomes([...homes, await res.json()]);
+      const res = await trackStepSave(
+        fetch(`/api/scholarship/${sid}/homes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        })
+      );
+      if (res.ok) {
+        const created: Home = await res.json();
+        setHomes([...homes, created]);
+        updateCachedRecord(sid, (record) => ({
+          ...record,
+          homes: [...record.homes, created],
+        }));
+      }
     } finally {
       setAddingHome(false);
     }
@@ -1369,7 +1903,16 @@ export function FinancialAidStep({
 
   function deleteHome(id: number) {
     setHomes((prev) => prev.filter((h) => h.id !== id));
-    fetch(`/api/scholarship-items/homes/${id}`, { method: "DELETE" }).catch((err) => console.error("Failed to delete home:", err));
+    if (scholarship) {
+      updateCachedRecord(scholarship.id, (record) => ({
+        ...record,
+        homes: record.homes.filter((h) => h.id !== id),
+      }));
+    }
+    trackRecordSave(
+      scholarship?.id,
+      fetch(`/api/scholarship-items/homes/${id}`, { method: "DELETE" })
+    ).catch((err) => console.error("Failed to delete home:", err));
   }
 
   async function addVehicle() {
@@ -1377,12 +1920,21 @@ export function FinancialAidStep({
     try {
       const sid = await ensureScholarship();
       if (!sid) return;
-      const res = await fetch(`/api/scholarship/${sid}/vehicles`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) setVehicles([...vehicles, await res.json()]);
+      const res = await trackStepSave(
+        fetch(`/api/scholarship/${sid}/vehicles`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        })
+      );
+      if (res.ok) {
+        const created: Vehicle = await res.json();
+        setVehicles([...vehicles, created]);
+        updateCachedRecord(sid, (record) => ({
+          ...record,
+          vehicles: [...record.vehicles, created],
+        }));
+      }
     } finally {
       setAddingVehicle(false);
     }
@@ -1390,7 +1942,16 @@ export function FinancialAidStep({
 
   function deleteVehicle(id: number) {
     setVehicles((prev) => prev.filter((v) => v.id !== id));
-    fetch(`/api/scholarship-items/vehicles/${id}`, { method: "DELETE" }).catch((err) => console.error("Failed to delete vehicle:", err));
+    if (scholarship) {
+      updateCachedRecord(scholarship.id, (record) => ({
+        ...record,
+        vehicles: record.vehicles.filter((v) => v.id !== id),
+      }));
+    }
+    trackRecordSave(
+      scholarship?.id,
+      fetch(`/api/scholarship-items/vehicles/${id}`, { method: "DELETE" })
+    ).catch((err) => console.error("Failed to delete vehicle:", err));
   }
 
   async function addBenefit() {
@@ -1398,12 +1959,21 @@ export function FinancialAidStep({
     try {
       const sid = await ensureScholarship();
       if (!sid) return;
-      const res = await fetch(`/api/scholarship/${sid}/benefits`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) setBenefits([...benefits, await res.json()]);
+      const res = await trackStepSave(
+        fetch(`/api/scholarship/${sid}/benefits`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        })
+      );
+      if (res.ok) {
+        const created: Benefit = await res.json();
+        setBenefits([...benefits, created]);
+        updateCachedRecord(sid, (record) => ({
+          ...record,
+          benefits: [...record.benefits, created],
+        }));
+      }
     } finally {
       setAddingBenefit(false);
     }
@@ -1411,7 +1981,16 @@ export function FinancialAidStep({
 
   function deleteBenefit(id: number) {
     setBenefits((prev) => prev.filter((b) => b.id !== id));
-    fetch(`/api/scholarship-items/benefits/${id}`, { method: "DELETE" }).catch((err) => console.error("Failed to delete benefit:", err));
+    if (scholarship) {
+      updateCachedRecord(scholarship.id, (record) => ({
+        ...record,
+        benefits: record.benefits.filter((b) => b.id !== id),
+      }));
+    }
+    trackRecordSave(
+      scholarship?.id,
+      fetch(`/api/scholarship-items/benefits/${id}`, { method: "DELETE" })
+    ).catch((err) => console.error("Failed to delete benefit:", err));
   }
 
   const deadlinePassed = isDeadlinePassed(
@@ -1423,7 +2002,10 @@ export function FinancialAidStep({
   // layout's opacity wrapper) — every input was still editable underneath,
   // and unlocking didn't change anything because nothing was actually
   // disabled to begin with.
-  const isReadonly = deadlinePassed || scholarshipLocked;
+  //
+  // Also read-only for the moment a page opened from the cache spends
+  // waiting on the load behind it (see `refreshing`).
+  const isReadonly = deadlinePassed || scholarshipLocked || refreshing;
 
   function confirmDelete() {
     if (!pendingDelete) return;
@@ -1631,7 +2213,10 @@ export function FinancialAidStep({
                 <Field>
                   <FieldLabel className="text-xs">
                     <span className="inline-flex items-center gap-1.5">
-                      SUFS Award ID <span className="text-red-400">*</span>
+                      {/* No required marker: the section completes
+                          without an Award ID (a student may not have
+                          been awarded yet). */}
+                      SUFS Award ID
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
@@ -1685,20 +2270,29 @@ export function FinancialAidStep({
   async function saveScholarshipChoice(choice: "none" | "snap" | "full") {
     const sid = await ensureScholarship();
     if (!sid) return;
+    const flags = {
+      isNotParticipating: choice === "none",
+      isSNAPBenefits: choice === "snap",
+      isOpportunityScholarship: choice === "full",
+    };
+    // The cached record gets the choice as it is sent, so leaving the
+    // step and coming back shows it.
+    updateCachedRow(sid, flags);
     await trackAutosave(
-      fetch(`/api/scholarship/${sid}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          isNotParticipating: choice === "none",
-          isSNAPBenefits: choice === "snap",
-          isOpportunityScholarship: choice === "full",
-          last_edited: Date.now(),
-        }),
-      }).then(async (res) => {
-        if (!res.ok) throw new Error(`Save failed (${res.status})`);
-        return res;
-      })
+      trackRecordSave(
+        sid,
+        fetch(`/api/scholarship/${sid}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...flags,
+            last_edited: Date.now(),
+          }),
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(`Save failed (${res.status})`);
+          return res;
+        })
+      )
     );
     // Revalidate SWR caches so side nav + overview table update immediately
     mutate(`/api/scholarship/${sid}`);
@@ -1709,16 +2303,24 @@ export function FinancialAidStep({
     setScholarshipChoice(null);
     setShowForm(false);
     if (scholarship?.id) {
-      await fetch(`/api/scholarship/${scholarship.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          isNotParticipating: false,
-          isSNAPBenefits: false,
-          isOpportunityScholarship: false,
-          last_edited: Date.now(),
-        }),
-      });
+      const flags = {
+        isNotParticipating: false,
+        isSNAPBenefits: false,
+        isOpportunityScholarship: false,
+      };
+      // Cleared in the cached record as it is cleared on the server.
+      updateCachedRow(scholarship.id, flags);
+      await trackRecordSave(
+        scholarship.id,
+        fetch(`/api/scholarship/${scholarship.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...flags,
+            last_edited: Date.now(),
+          }),
+        })
+      );
       // Revalidate SWR caches
       mutate(`/api/scholarship/${scholarship.id}`);
       if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
@@ -2004,7 +2606,12 @@ export function FinancialAidStep({
                     </td>
                     <td className="px-2 py-4">
                       <p className="font-medium">
-                        {scholarship ? "Continue the SailFuture Opportunity Scholarship" : "Complete the SailFuture Opportunity Scholarship"}
+                        {/* Names the option, like the two rows above,
+                            so it reads right whichever one is chosen.
+                            It used to say "Continue the…" as soon as the
+                            family had a scholarship record at all — and
+                            declining creates one. */}
+                        Apply for the SailFuture Opportunity Scholarship
                       </p>
                     </td>
                     <td className="px-4 py-4 w-10 text-muted-foreground">
@@ -2104,11 +2711,18 @@ export function FinancialAidStep({
                     setSnapBenefitsFiles(files);
                     const sid = scholarship?.id ?? await ensureScholarship();
                     if (sid) {
-                      await fetch(`/api/scholarship/${sid}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ snap_benefits: files, last_edited: Date.now() }),
-                      });
+                      // The cached record gets the letter as it is
+                      // sent, so leaving the step and coming back
+                      // shows it.
+                      updateCachedRow(sid, { snap_benefits: files });
+                      await trackRecordSave(
+                        sid,
+                        fetch(`/api/scholarship/${sid}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ snap_benefits: files, last_edited: Date.now() }),
+                        })
+                      );
                       mutate(`/api/scholarship/${sid}`);
                       if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
                     }
@@ -2398,10 +3012,9 @@ export function FinancialAidStep({
                     if (!checked && benefits.length > 0) {
                       const toDelete = [...benefits];
                       setBenefits([]);
-                      toDelete.forEach((b) => {
-                        fetch(`/api/scholarship-items/benefits/${b.id}`, { method: "DELETE" })
-                          .catch((err) => console.error("Failed to delete benefit:", err));
-                      });
+                      // Same DELETE per benefit as the trash button, so
+                      // the cached record loses them too.
+                      toDelete.forEach((b) => deleteBenefit(b.id));
                     }
                   }}
                   disabled={isReadonly}
@@ -3669,7 +4282,10 @@ export function FinancialAidStep({
               <p className="text-sm font-medium mb-4">
                 I hereby certify that all the information provided in this application is accurate and complete to the best of my knowledge. I understand that any falsification or omission of information may result in disqualification from the scholarship program.
               </p>
-              <div className="rounded-md border border-input bg-background">
+              {/* The pad is not a form control, so `isReadonly` cannot
+                  disable it; while `refreshing` it ignores the pointer
+                  instead, like the fields around it. */}
+              <div className={`rounded-md border border-input bg-background ${refreshing ? "pointer-events-none" : ""}`}>
                 <SignatureCanvas
                   ref={sigCanvasRef}
                   penColor="black"
