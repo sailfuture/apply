@@ -6304,8 +6304,9 @@ function ScholarshipReviewBlock({
     // family pre-qualifies via SNAP. The Opportunity Scholarship
     // form was skipped, so there's no income/asset bracket to
     // compute. Instead the family pays:
-    //   - Tuition: full base × number of active students, less the
-    //     SUFS sum across students.
+    //   - Tuition: each active student's tuition for the months they
+    //     attend (the full year unless a later start month was set on
+    //     their determination), less the SUFS sum across students.
     //   - Transport: $0 — SNAP families don't pay the
     //     transportation fee.
     //   - Annual admin fee: $500 per student (NOT per family on the
@@ -6323,7 +6324,24 @@ function ScholarshipReviewBlock({
       (sum, a) => sum + resolveSufsAmount(a, schoolYear),
       0
     );
-    const tuitionTotal = baseTuition * numStudents;
+    // Tuition comes from each student's own determination, so a
+    // student starting in January counts 7 of 12 months here exactly
+    // as on their receipt. Before a determination is saved there is
+    // nothing stored and the line reads as the full year.
+    const snapTuitionLines = snapStudents.map((a) =>
+      studentTuitionLine(a, baseTuition, schoolYear?.billing_start_date)
+    );
+    const tuitionTotal = snapTuitionLines.reduce(
+      (sum, line) => sum + line.tuition,
+      0
+    );
+    const snapTuitionNote = snapTuitionLines.every(
+      (line) => line.months >= FULL_YEAR_PAYMENTS
+    )
+      ? `${formatCurrency(baseTuition)} × ${numStudents} student${numStudents === 1 ? "" : "s"}`
+      : snapTuitionLines.length === 1
+        ? `${snapTuitionLines[0].months} of ${FULL_YEAR_PAYMENTS} months of ${formatCurrency(baseTuition)}`
+        : `For the months each student attends, of ${formatCurrency(baseTuition)} a year`;
     // Transport is shown on the SNAP cost table (admin needs to see
     // what the school normally bills) but the Opportunity
     // Scholarship line below absorbs it on the SNAP path. Multi-
@@ -6341,12 +6359,15 @@ function ScholarshipReviewBlock({
     const opportunityScholarshipRebate = snapConfirmed
       ? Math.max(tuitionTotal + transportTotal - sufsTotal, 0)
       : 0;
+    // The SUFS award can exceed a short year's tuition (a student who
+    // starts in May is charged 3 months), so the part SUFS offsets
+    // stops at zero; the admin fee is owed either way.
     const familyOwedSnap = snapConfirmed
       ? annualFeeTotal
-      : tuitionTotal + transportTotal + annualFeeTotal - sufsTotal;
+      : Math.max(tuitionTotal + transportTotal - sufsTotal, 0) +
+        annualFeeTotal;
     // Spread over the students' payment plan: 12 for a full year,
-    // fewer for a family starting partway through it (the yearly
-    // amount itself never changes for a late start). When the
+    // fewer for a family starting partway through it. When the
     // students' plans differ there is no single divisor, so this
     // family-level estimate falls back to 12 and its label says the
     // months vary.
@@ -6410,8 +6431,7 @@ function ScholarshipReviewBlock({
                 <td className="px-4 py-2 font-medium">
                   Tuition
                   <span className="block text-[11px] text-muted-foreground font-normal">
-                    {formatCurrency(baseTuition)} × {numStudents} student
-                    {numStudents === 1 ? "" : "s"}
+                    {snapTuitionNote}
                   </span>
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums">

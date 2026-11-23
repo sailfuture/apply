@@ -15,6 +15,10 @@ import { planBillingTexts } from "@/lib/billing-texts";
 import { readAppSettings } from "@/lib/app-settings";
 import { runAutopaySweep, type AutopaySweepResult } from "@/lib/autopay";
 import {
+  addStudentsDueForBilling,
+  type DueStudentsSweepResult,
+} from "@/lib/billing";
+import {
   sendBillingUpcomingSms,
   sendPastDueTuitionSms,
 } from "@/lib/sms/triggers";
@@ -127,6 +131,9 @@ export async function GET(req: NextRequest) {
     },
     // On-by-default autopay sweep (lib/autopay.ts).
     autopay: { switchedOn: 0, invoicesCharged: 0, errors: 0 },
+    // Students added to their family's invoice because their own
+    // first payment month opened (lib/billing.ts).
+    dueStudents: { added: 0, errors: 0 },
   };
 
   try {
@@ -363,6 +370,33 @@ export async function GET(req: NextRequest) {
         } catch (err) {
           console.error(
             `[cron/email-reminders] autopay sweep failed for year ${year.id}:`,
+            err
+          );
+        }
+      }
+
+      // One invoice per family, each student from their own month: a
+      // student whose first payment is a later month than the family's
+      // invoices was left off the subscription when billing started.
+      // Add each one once the invoice before their month has gone out,
+      // so the next invoice carries them (lib/billing.ts,
+      // `addStudentsDueForBilling`). Nothing is charged here: an added
+      // line is first billed on the subscription's next invoice. Staff
+      // get one email naming who was added.
+      if (billingSubscriptions && billingSubscriptions.size > 0) {
+        try {
+          const due = await addStudentsDueForBilling({
+            yearId: year.id,
+            subscriptionByFamily: billingSubscriptions,
+          });
+          result.dueStudents.added += due.added.length;
+          result.dueStudents.errors += due.errors.length;
+          if (due.added.length > 0 || due.errors.length > 0) {
+            await alertDueStudents(year.year_name, year.id, due);
+          }
+        } catch (err) {
+          console.error(
+            `[cron/email-reminders] due-student sweep failed for year ${year.id}:`,
             err
           );
         }
@@ -638,6 +672,52 @@ async function alertAutopaySweep(
         : []),
       "",
       "A family can turn autopay off on their Tuition & Fees page; staff can on the family's billing card.",
+    ],
+    { yearId }
+  );
+}
+
+/** Staff summary of the students put on their family's invoice today
+ *  because their first payment month is next (or who couldn't be). One
+ *  email per run, only when something happened. */
+async function alertDueStudents(
+  yearName: string,
+  yearId: number,
+  due: DueStudentsSweepResult
+): Promise<void> {
+  const money = (amount: number) =>
+    amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const added = await Promise.all(
+    due.added.map(
+      async (s) =>
+        `  - ${s.studentName} (${await familyAlertLabel(s.familyId)}): ${s.count} monthly payment${s.count === 1 ? "" : "s"} of ${money(s.monthlyAmount)}`
+    )
+  );
+  const errors = await Promise.all(
+    due.errors.map(
+      async (e) =>
+        `  - ${e.familyId > 0 ? await familyAlertLabel(e.familyId) : "Sweep"}: ${e.error}`
+    )
+  );
+  const n = due.added.length;
+  await sendBillingAlert(
+    n > 0
+      ? `${n} ${n === 1 ? "student" : "students"} added to monthly billing`
+      : "A student due to start monthly billing couldn't be added",
+    [
+      ...(n > 0
+        ? [
+            `These students' first ${yearName} payment is on their family's next invoice. They were held off the invoice until their own start month, and are on it from the next one, alongside any siblings already being billed:`,
+            ...added,
+          ]
+        : []),
+      ...(errors.length > 0
+        ? [
+            "",
+            "Couldn't be added (tomorrow's run retries; check the family's Billing card if this repeats):",
+            ...errors,
+          ]
+        : []),
     ],
     { yearId }
   );

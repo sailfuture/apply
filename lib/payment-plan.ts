@@ -3,13 +3,18 @@ import { buildMonthSlots, parseAnchorDate } from "@/lib/billing-schedule";
 /**
  * Tuition payment plans.
  *
- * A family owes the same yearly amount whenever they enroll: nothing
- * is prorated for a late start. What changes is how many monthly
- * payments that amount is spread over. The billing year is the 12
- * months from the school year's `billing_start_date` (August through
- * July), every plan ends with the last of those months, and a family's
- * first payment is the month they enroll. A family starting in January
- * pays the whole amount in 7 payments (January through July), not 12.
+ * What a student owes for the year is spread over monthly payments.
+ * The billing year is the 12 months from the school year's
+ * `billing_start_date` (August through July), every plan ends with the
+ * last of those months, and a student's first payment is the month
+ * they start (or the month billing begins, if that is later). A
+ * student starting in January pays in 7 payments, January through
+ * July, not 12. (How much they owe for a shortened year is the second
+ * half of this file.)
+ *
+ * A family gets ONE invoice a month, but each student's payments run
+ * over that student's own months: see "One invoice, each student from
+ * their own month" below.
  *
  * `registration_application.payment_count` stores the number of
  * payments (1–12). The last payment is always the year's final month,
@@ -116,6 +121,52 @@ export function planFirstSlotStartMs(
   if (!hasBillingStart(billingStartDate)) return null;
   const slot = yearSlots(billingStartDate)[FULL_YEAR_PAYMENTS - count];
   return slot ? slot.periodStart : null;
+}
+
+/* ─────────────── One invoice, each student from their own month ───────────────
+ *
+ * Siblings share the family's one monthly invoice, but not a start
+ * month. A sibling who starts in January owes less tuition than one
+ * who started in August, and is not billed before January just because
+ * a brother or sister already is. Their line joins the family's invoice
+ * on the first one dated in or after their own first payment month, and
+ * the invoice carries both students from then on.
+ *
+ * So when a family's billing starts, or a student is being put on a
+ * subscription that is already running, a student whose month hasn't
+ * come is left off for now ("scheduled") and added when it opens.
+ */
+
+/**
+ * Whether a student's plan has reached its first payment on an invoice
+ * schedule that has `paymentsLeft` invoices still to send this year,
+ * the next one included. A 7-payment plan (first payment January) is
+ * not due while 8 or more remain. A row with no plan stored was priced
+ * before plans existed and bills as soon as it can, as it always did.
+ */
+export function planIsDue(planCount: unknown, paymentsLeft: number): boolean {
+  const stored = storedPaymentCount(planCount);
+  return stored == null || paymentsLeft <= stored;
+}
+
+/**
+ * One sentence per student left off the invoice for now because their
+ * first payment month hasn't come (the Start Monthly Billing response's
+ * `scheduled`). Null when everyone is being billed.
+ */
+export function describeScheduledStudents(
+  scheduled:
+    | Array<{ studentName: string; firstMonthLabel: string | null }>
+    | null
+    | undefined
+): string | null {
+  if (!scheduled || scheduled.length === 0) return null;
+  const lines = scheduled.map((s) =>
+    s.firstMonthLabel
+      ? `${s.studentName} starts paying in ${s.firstMonthLabel}`
+      : `${s.studentName} starts paying later this year`
+  );
+  return `Not on the invoice yet: ${lines.join("; ")}. They are added to this family's invoice automatically when that month opens.`;
 }
 
 /* ─────────────── Tuition for a student who starts mid-year ───────────────

@@ -2433,6 +2433,11 @@ function StudentPacketBlock({
         toast.success(
           `${name} verified and on the family's monthly billing ($${billing.monthlyAmount.toFixed(2)}/mo from the next invoice).`
         );
+      } else if (billing.status === "scheduled") {
+        toast.success(
+          `${name} verified. Their first payment ($${billing.monthlyAmount.toFixed(2)}/mo) is ${billing.firstMonthLabel ?? "a later month"}, so they join the family's invoice then, automatically.`,
+          { duration: 12000 }
+        );
       } else if (billing.status === "no_subscription") {
         toast.warning(
           `${name} verified. This family has no monthly subscription for the year — start billing from the family's Billing card.`

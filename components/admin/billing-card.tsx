@@ -4,7 +4,10 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { describePlanChanges } from "@/lib/payment-plan";
+import {
+  describePlanChanges,
+  describeScheduledStudents,
+} from "@/lib/payment-plan";
 import {
   AlertCircle,
   Calendar,
@@ -138,6 +141,25 @@ interface BillingSnapshot {
   autopay?: AutopayStatus | null;
   /** On the `autopay_on` response: what switching on charged. */
   autopayResult?: { ok: boolean; changed?: boolean; charges?: AutopayCharge[] } | null;
+  /** Students who are priced but not on the invoice yet, because each
+   *  student is billed from their own start month (lib/billing.ts,
+   *  `StudentsOffInvoice`). `later`: first payment month still ahead,
+   *  added automatically when it opens. `due`: their month is the next
+   *  invoice and the daily job hasn't added them yet. */
+  offInvoice?: {
+    later: OffInvoiceStudent[];
+    due: OffInvoiceStudent[];
+  } | null;
+}
+
+interface OffInvoiceStudent {
+  studentId: number;
+  studentName: string;
+  /** Payments on their plan. */
+  count: number;
+  monthlyAmount: number;
+  /** "January 2027", or null when the year has no billing calendar. */
+  firstMonthLabel: string | null;
 }
 
 interface Props {
@@ -215,7 +237,11 @@ export function BillingCard({
 
   async function runAction(
     action: BillingAction,
-    payload?: Record<string, unknown>
+    payload?: Record<string, unknown>,
+    /** Says what happened when the default wording for the action
+     *  doesn't fit (adding a student to a subscription that is already
+     *  running goes through `start` too). */
+    successMessage?: string
   ): Promise<void> {
     setPending(action);
     try {
@@ -229,7 +255,7 @@ export function BillingCard({
         throw new Error(body?.error ?? `Action failed (${res.status})`);
       }
       await mutate(body, { revalidate: false });
-      const message = actionSuccessMessage(action, body);
+      const message = successMessage ?? actionSuccessMessage(action, body);
       if (body?.autopayResult?.charges?.some((c: AutopayCharge) => c.outcome === "failed")) {
         toast.warning(message);
       } else {
@@ -239,6 +265,12 @@ export function BillingCard({
       // showed: the payment plan was set for the months left.
       const planNote = describePlanChanges(body?.planChanges);
       if (planNote) toast.info(planNote, { duration: 15000 });
+      // A student whose first payment is a later month isn't on the
+      // invoice yet. Said out loud, or they look forgotten.
+      // The card's standing "Not on the invoice yet" label says the same
+      // and stays; the toast is for the moment billing starts.
+      const scheduledNote = describeScheduledStudents(body?.scheduled);
+      if (scheduledNote) toast.info(scheduledNote, { duration: 15000 });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -443,6 +475,10 @@ export function BillingCard({
 
   const sub = data.subscription;
   const autopay = data.autopay ?? null;
+  const offLater = data.offInvoice?.later ?? [];
+  const offDue = data.offInvoice?.due ?? [];
+  const usd = (amount: number) =>
+    amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
   // The family's monthly total is the sum of every per-student
   // SubscriptionItem, not just the first. Reading only items.data[0]
   // showed a single student's amount on multi-student families.
@@ -515,6 +551,69 @@ export function BillingCard({
           </p>
         ) : null}
       </div>
+
+      {/* ─── Not on the invoice yet ─── Each student is billed from
+          their own start month, so a sibling who starts in January has
+          no line here in November. Without this the card shows one
+          student's amount and no sign of the other, which reads as a
+          student who was forgotten. It stays until they are added. */}
+      {!isCanceled && (offLater.length > 0 || offDue.length > 0) ? (
+        <div className="rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2.5 space-y-1.5">
+          <p className="text-xs font-semibold text-sky-900">
+            Not on the invoice yet
+          </p>
+          <ul className="space-y-0.5 text-xs text-sky-900">
+            {offLater.map((s) => (
+              <li key={s.studentId}>
+                <span className="font-medium">{s.studentName}</span>
+                {": "}
+                <span className="tabular-nums">{usd(s.monthlyAmount)}</span>
+                {" / month, starting "}
+                {s.firstMonthLabel ?? "later this year"}
+                {` (${s.count} payment${s.count === 1 ? "" : "s"})`}
+              </li>
+            ))}
+            {offDue.map((s) => (
+              <li key={s.studentId}>
+                <span className="font-medium">{s.studentName}</span>
+                {": "}
+                <span className="tabular-nums">{usd(s.monthlyAmount)}</span>
+                {" / month, due on the next invoice"}
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11px] text-sky-900/80">
+            {cancelingAtPeriodEnd
+              ? "This subscription is set to end, so nobody will be added to it. Undo the cancellation first if this family is staying."
+              : offDue.length > 0
+                ? "A student whose start month has opened is added automatically by the next daily run, or add them now. The monthly amount above goes up when they join."
+                : "Each student is billed from their own start month. They are added to this family's invoice automatically when it opens, and the monthly amount above goes up then."}
+          </p>
+          {offDue.length > 0 && !cancelingAtPeriodEnd ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={pending !== null}
+              onClick={() =>
+                runAction(
+                  "start",
+                  undefined,
+                  "Added to this family's invoice, starting with the next one."
+                )
+              }
+            >
+              {pending === "start" ? (
+                <Loader2
+                  className="size-3.5 mr-1.5 animate-spin"
+                  aria-hidden="true"
+                />
+              ) : null}
+              Add to invoice now
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Actions — every button on one row, inline with Cancel at period
           end. The View links always render (still useful after the

@@ -460,6 +460,8 @@ async function cascadeMidYearAdditionBilling(
       ? `Added ${name} (added mid-year) to the family's monthly billing at ${money(outcome.monthlyAmount)}/mo, starting with the next invoice.`
       : outcome.status === "already_billed"
         ? `${name} (added mid-year) was already on the family's monthly billing.`
+        : outcome.status === "scheduled"
+          ? `${name} (added mid-year) is confirmed. Their first payment (${money(outcome.monthlyAmount)}/mo) is ${outcome.firstMonthLabel ?? "a later month"}, so they are not on the family's invoice yet; they are added automatically when that month opens.`
         : outcome.status === "no_subscription"
           ? `${name} (added mid-year) is confirmed, but the family has no live subscription for this year — start monthly billing from the Billing card.`
           : outcome.status === "no_amount"

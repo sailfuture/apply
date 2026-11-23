@@ -6,7 +6,11 @@ import {
   getBillingSnapshot,
   uncancelSubscription,
 } from "@/lib/stripe";
-import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
+import {
+  startMonthlyBilling,
+  getStudentsOffInvoice,
+  BillingPreconditionError,
+} from "@/lib/billing";
 import {
   disableAutopay,
   enableAutopay,
@@ -94,14 +98,39 @@ export async function GET(
         customerId,
       });
     }
-    const [snapshot, autopay] = await Promise.all([
-      getBillingSnapshot(subscriptionId),
-      readAutopay(familyId, yearId),
-    ]);
-    return NextResponse.json({ ...snapshot, customerId, autopay });
+    const { snapshot, autopay, offInvoice } = await readCardState(
+      subscriptionId,
+      familyId,
+      yearId
+    );
+    return NextResponse.json({ ...snapshot, customerId, autopay, offInvoice });
   } catch (err) {
     return handleAdminError(err);
   }
+}
+
+/**
+ * Everything the Billing card draws for a live subscription: Stripe's
+ * snapshot, autopay, and `offInvoice`, the students who are priced but
+ * not on the invoice yet because their own first payment month is later
+ * (the card's standing "Not on the invoice yet" label). Every response
+ * from this route carries all three, since the card replaces what it
+ * shows with whatever an action returns.
+ */
+async function readCardState(
+  subscriptionId: string,
+  familyId: number,
+  yearId: number
+) {
+  const snapshotPromise = getBillingSnapshot(subscriptionId);
+  const [snapshot, autopay, offInvoice] = await Promise.all([
+    snapshotPromise,
+    readAutopay(familyId, yearId),
+    snapshotPromise.then((s) =>
+      getStudentsOffInvoice({ familyId, yearId, subscription: s.subscription })
+    ),
+  ]);
+  return { snapshot, autopay, offInvoice };
 }
 
 export async function POST(
@@ -133,17 +162,22 @@ export async function POST(
     if (body.action === "start") {
       try {
         const result = await startMonthlyBilling({ familyId, yearId });
-        const [snapshot, autopay] = await Promise.all([
-          getBillingSnapshot(result.subscription.id),
-          readAutopay(familyId, yearId),
-        ]);
+        const { snapshot, autopay, offInvoice } = await readCardState(
+          result.subscription.id,
+          familyId,
+          yearId
+        );
         // `planChanges`: students whose monthly amount moved because
         // their payment plan was set as billing started. The card
         // says so, since the button showed the amount on file.
+        // `scheduled`: students left off the invoice until their own
+        // first payment month, so the card can say who and when.
         return NextResponse.json({
           ...snapshot,
           autopay,
+          offInvoice,
           planChanges: result.planChanges,
+          scheduled: result.scheduled,
         });
       } catch (err) {
         if (err instanceof BillingPreconditionError) {
@@ -208,11 +242,17 @@ export async function POST(
 
     // Always return a fresh snapshot so the admin card updates without
     // a follow-up GET.
-    const [snapshot, autopay] = await Promise.all([
-      getBillingSnapshot(subscriptionId),
-      readAutopay(familyId, yearId),
-    ]);
-    return NextResponse.json({ ...snapshot, autopay, autopayResult });
+    const { snapshot, autopay, offInvoice } = await readCardState(
+      subscriptionId,
+      familyId,
+      yearId
+    );
+    return NextResponse.json({
+      ...snapshot,
+      autopay,
+      offInvoice,
+      autopayResult,
+    });
   } catch (err) {
     return handleAdminError(err);
   }
