@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { signerFromRow } from "@/lib/residential-signer";
 import type {
   XanoApplication,
   XanoFamily,
@@ -397,6 +398,9 @@ function shapePacket(p: XanoStudentRegistration) {
       p.addition_enrollment_agreement_status ?? "",
     addition_enrollment_agreement_sent_at:
       p.addition_enrollment_agreement_sent_at ?? null,
+    // Residential placements: the case worker / legal guardian who signs
+    // this year's waiver and enrollment agreement.
+    ...signerFromRow(p),
     // Admin-only placement (grade + crew) and the crew-change audit
     // pair. Surfaced so the enrolled-detail Placement card can render
     // the current values + "previously Crew X · changed <date>".

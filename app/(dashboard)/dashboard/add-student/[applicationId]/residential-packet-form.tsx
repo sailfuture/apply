@@ -25,6 +25,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Clock, FileUp, Loader2, X, ExternalLink } from "lucide-react";
 import { PandaDocSigningStep } from "./pandadoc-signing-step";
+import {
+  SIGNER_ROLES,
+  isSignerComplete,
+  isValidSignerEmail,
+  signerFromRow,
+} from "@/lib/residential-signer";
 
 /**
  * Per-student registration packet for a residential / foster mid-year
@@ -94,6 +100,15 @@ interface Packet {
    *  so the copies here only mirror what the PandaDoc routes wrote. */
   withdrawal_form_pandadoc_id?: string | null;
   withdrawal_form_status?: string | null;
+  /** The case worker / legal guardian who signs the waiver and the
+   *  enrollment agreement (`lib/residential-signer.ts`). Staff send the
+   *  documents to them; the caregiver filling in this form is copied. */
+  signer_role?: string;
+  signer_first_name?: string;
+  signer_last_name?: string;
+  signer_email?: string;
+  signer_phone?: string;
+  signer_agency?: string;
 }
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
@@ -158,6 +173,12 @@ function emptyPacket(
     interested_in_counseling_services: "",
     other_adults_approved_for_pickup: "",
     prohibited_adults: "",
+    signer_role: "",
+    signer_first_name: "",
+    signer_last_name: "",
+    signer_email: "",
+    signer_phone: "",
+    signer_agency: "",
   };
 }
 
@@ -182,6 +203,7 @@ function isPacketComplete(
   if (p.carry_epi_pen && !p.epipen_explainer) return false;
   if (!p.other_adults_approved_for_pickup) return false;
   if (!p.prohibited_adults) return false;
+  if (!isSignerComplete(signerFromRow(p))) return false;
   if (
     p.transferring_from_pinellas_public &&
     p.withdrawal_form_status !== "completed"
@@ -525,6 +547,12 @@ export function ResidentialPacketForm({
     const { id, registrationConfirmed, ...payload } = packet;
     void id;
     void registrationConfirmed;
+    if (payload.signer_email && !isValidSignerEmail(payload.signer_email)) {
+      delete payload.signer_email;
+    }
+    if (payload.signer_phone && payload.signer_phone.length !== 10) {
+      delete payload.signer_phone;
+    }
     const res = await fetch(`/api/student-registration/${packet.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -921,6 +949,76 @@ export function ResidentialPacketForm({
             onChange={(v) => setField("prohibited_adults", v)}
             invalid={invalid(packet.prohibited_adults)}
           />
+        </CardContent>
+      </Card>
+
+      {/* Case worker / legal guardian. The caregiver can't sign for a
+          placement, so the school sends the waiver and enrollment
+          agreement to this person and copies the caregiver. */}
+      <Card className="overflow-hidden gap-0 py-0">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">
+            Case Worker or Legal Guardian
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
+          <p className="text-sm text-muted-foreground">
+            Who signs {studentName}&rsquo;s liability waiver and enrollment
+            agreement? The school emails the documents to them for signature
+            and copies you.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <PacketSelect
+              label="Role"
+              value={packet.signer_role ?? ""}
+              options={[...SIGNER_ROLES]}
+              onChange={(v) => setField("signer_role", v)}
+              invalid={invalid(packet.signer_role ?? "")}
+            />
+            <Field>
+              <FieldLabel className="text-xs">First Name</FieldLabel>
+              <Input
+                value={packet.signer_first_name ?? ""}
+                onChange={(e) => setField("signer_first_name", e.target.value)}
+                className={invalid(packet.signer_first_name ?? "") ? "border-2 border-red-400" : ""}
+              />
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">Last Name</FieldLabel>
+              <Input
+                value={packet.signer_last_name ?? ""}
+                onChange={(e) => setField("signer_last_name", e.target.value)}
+                className={invalid(packet.signer_last_name ?? "") ? "border-2 border-red-400" : ""}
+              />
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">Email</FieldLabel>
+              <Input
+                type="email"
+                value={packet.signer_email ?? ""}
+                onChange={(e) => setField("signer_email", e.target.value)}
+                className={
+                  showValidation && !isValidSignerEmail(packet.signer_email ?? "")
+                    ? "border-2 border-red-400"
+                    : ""
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">Phone (optional)</FieldLabel>
+              <PhoneInput
+                value={packet.signer_phone ?? ""}
+                onChange={(v) => setField("signer_phone", v)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">Agency (optional)</FieldLabel>
+              <Input
+                value={packet.signer_agency ?? ""}
+                onChange={(e) => setField("signer_agency", e.target.value)}
+              />
+            </Field>
+          </div>
         </CardContent>
       </Card>
 

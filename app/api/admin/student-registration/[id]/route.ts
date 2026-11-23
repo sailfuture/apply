@@ -5,6 +5,7 @@ import { xano } from "@/lib/xano";
 import type { XanoStudentRegistration } from "@/lib/xano";
 import { markStudentEnrolled } from "@/lib/student-enrolled";
 import { isPendingMidYearAddition } from "@/lib/midyear-additions";
+import { SIGNER_FIELDS, cleanSignerPatch } from "@/lib/residential-signer";
 import {
   addMidYearAdditionToBilling,
   type MidYearBillingOutcome,
@@ -126,6 +127,15 @@ export async function PATCH(
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
       if (key in body) patch[key] = body[key];
+    }
+    // Residential document signer (case worker / legal guardian),
+    // validated: the send route emails PandaDoc links to this address.
+    if (SIGNER_FIELDS.some((k) => k in body)) {
+      const cleaned = cleanSignerPatch(body);
+      if ("error" in cleaned) {
+        return NextResponse.json({ error: cleaned.error }, { status: 400 });
+      }
+      Object.assign(patch, cleaned.patch);
     }
 
     // Auto-stamp the audit pair when `registrationConfirmed` is in

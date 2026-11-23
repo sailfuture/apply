@@ -44,6 +44,8 @@ export function SendLiabilityWaiverButton({
   onSent,
   size = "sm",
   className,
+  docType = "liability_waiver",
+  copiedNote = "the admissions inbox is copied",
 }: {
   studentId: number;
   yearId: number;
@@ -61,12 +63,21 @@ export function SendLiabilityWaiverButton({
   onSent?: () => void | Promise<unknown>;
   size?: "sm" | "default";
   className?: string;
+  /** Which document to send. "enrollment_agreement" is only accepted
+   *  for residential placements (sent per student to the case worker /
+   *  legal guardian). */
+  docType?: "liability_waiver" | "enrollment_agreement";
+  /** Who else gets a copy, for the confirm dialog. */
+  copiedNote?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
 
   const isResend = !!status;
-  const label = isResend ? "Resend waiver" : "Send waiver";
+  const noun = docType === "enrollment_agreement" ? "agreement" : "waiver";
+  const docName =
+    docType === "enrollment_agreement" ? "enrollment agreement" : "liability waiver";
+  const label = isResend ? `Resend ${noun}` : `Send ${noun}`;
 
   async function run() {
     setSending(true);
@@ -74,19 +85,19 @@ export function SendLiabilityWaiverButton({
       const res = await fetch("/api/admin/pandadoc/send-waiver", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId, yearId }),
+        body: JSON.stringify({ studentId, yearId, docType }),
       });
       const body = (await res.json().catch(() => null)) as
         | { sentTo?: string; cc?: string[]; error?: string }
         | null;
       if (!res.ok) {
         throw new Error(
-          body?.error ?? `Couldn't send the waiver (${res.status})`
+          body?.error ?? `Couldn't send the ${noun} (${res.status})`
         );
       }
       const cc = body?.cc ?? [];
       toast.success(
-        `Liability waiver sent to ${body?.sentTo ?? recipientEmail}.` +
+        `${docName.charAt(0).toUpperCase()}${docName.slice(1)} sent to ${body?.sentTo ?? recipientEmail}.` +
           // Names the actual addresses the server CC'd rather than a
           // guess — the list is env-configurable, so the client has no
           // business asserting who it is.
@@ -100,7 +111,7 @@ export function SendLiabilityWaiverButton({
     } catch (err) {
       console.error("[SendLiabilityWaiverButton]", err);
       toast.error(
-        err instanceof Error ? err.message : "Couldn't send the waiver."
+        err instanceof Error ? err.message : `Couldn't send the ${noun}.`
       );
     } finally {
       setSending(false);
@@ -119,7 +130,7 @@ export function SendLiabilityWaiverButton({
         title={
           recipientEmail
             ? `${label} to ${recipientEmail}`
-            : "No primary parent email on file to send the waiver to"
+            : `No email on file to send the ${noun} to`
         }
       >
         {sending ? (
@@ -139,8 +150,7 @@ export function SendLiabilityWaiverButton({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {isResend ? "Resend" : "Send"} {studentName}&rsquo;s liability
-              waiver?
+              {isResend ? "Resend" : "Send"} {studentName}&rsquo;s {docName}?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
@@ -151,18 +161,18 @@ export function SendLiabilityWaiverButton({
                     {recipientEmail}
                   </span>
                   . They can sign from the email — no portal login
-                  needed, and the admissions inbox is copied.
+                  needed, and {copiedNote}.
                 </p>
                 {isResend ? (
                   <p>
-                    The waiver already out for {studentName} will be
+                    The {noun} already out for {studentName} will be
                     cancelled, so only the new link works. Send this if the
                     old one was never opened or went to the wrong address.
                   </p>
                 ) : null}
                 <p>
-                  Once signed, it appears here as the signed waiver PDF,
-                  same as one the family completed during registration.
+                  Once signed, it appears here as the signed PDF, same as
+                  one completed during registration.
                 </p>
               </div>
             </AlertDialogDescription>

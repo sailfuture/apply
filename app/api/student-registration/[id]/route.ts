@@ -2,6 +2,7 @@ import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { denyPacketAccess, stripReadonlyFields } from "@/lib/family-access";
+import { SIGNER_FIELDS, cleanSignerPatch } from "@/lib/residential-signer";
 import {
   SUFS_ADMIN_FIELDS,
   redactAdminSufs,
@@ -89,6 +90,17 @@ export async function PATCH(
     ...WITHDRAWAL_FORM_FIELDS,
   ]) {
     if (f in body) delete body[f];
+  }
+
+  // Residential document signer (case worker / legal guardian): staff
+  // send PandaDoc links to this address, so it's validated here too.
+  if (SIGNER_FIELDS.some((k) => k in body)) {
+    const cleaned = cleanSignerPatch(body);
+    if ("error" in cleaned) {
+      return NextResponse.json({ error: cleaned.error }, { status: 400 });
+    }
+    for (const k of SIGNER_FIELDS) delete body[k];
+    Object.assign(body, cleaned.patch);
   }
 
   // Xano types medicaid_number as a number; coerce empty strings to 0 before

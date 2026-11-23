@@ -93,6 +93,14 @@ import {
 } from "@/lib/format-note-time";
 import { formatDob } from "@/lib/dob";
 import { formatUSPhone } from "@/lib/phone";
+import {
+  SIGNER_ROLES,
+  isSignerComplete,
+  isValidSignerEmail,
+  signerFromRow,
+  signerFullName,
+  type ResidentialSigner,
+} from "@/lib/residential-signer";
 import { formatAddressOneLine } from "@/lib/address";
 import { StateSelect } from "@/components/state-select";
 import {
@@ -538,6 +546,7 @@ export default function EnrolledStudentDetailPage() {
         student={student}
         schoolYear={school_year}
         primary={primary}
+        isResidential={family?.is_residential === true}
         onChanged={() => mutate()}
       />
 
@@ -4152,10 +4161,14 @@ function SignedDocumentsCard({
   student,
   schoolYear,
   primary,
+  isResidential,
   onChanged,
 }: {
   packet: AdminEnrolledStudentResponse["packet"];
   familyDocuments: AdminEnrolledStudentResponse["family_documents"];
+  /** Residential / foster placement: documents go to the case worker or
+   *  legal guardian saved on the packet instead of the caregiver. */
+  isResidential: boolean;
   student: AdminEnrolledStudentResponse["student"];
   schoolYear: AdminEnrolledStudentResponse["school_year"];
   /** Lowest-id parent: the address the waiver goes to. Display only;
@@ -4181,12 +4194,21 @@ function SignedDocumentsCard({
   const clean = (status: string | null | undefined) =>
     status && status !== "void" ? status : "";
 
+  // Residential placements: the case worker / legal guardian on this
+  // year's packet signs the waiver and a per-student enrollment
+  // agreement; the caregiver on the family is only copied.
+  const signer = signerFromRow(packet);
+  const signerReady = isResidential && isSignerComplete(signer);
+  const signerName = signerFullName(signer);
+
   // ---- Enrollment Agreement ----
-  // A mid-year addition signs their own agreement on the packet; every
-  // other student is covered by the family's on the progress row.
+  // A mid-year addition or a residential placement signs their own
+  // agreement on the packet; every other student is covered by the
+  // family's on the progress row.
   const additionId = packet?.addition_enrollment_agreement_pandadoc_id ?? "";
+  const perStudentAgreement = !!additionId || isResidential;
   let enrollment: SignedDocState;
-  if (additionId) {
+  if (perStudentAgreement) {
     const status = clean(packet?.addition_enrollment_agreement_status);
     enrollment =
       status === "completed"
@@ -4296,20 +4318,54 @@ function SignedDocumentsCard({
             onChanged={onChanged}
           />
         ) : null}
-        <SendLiabilityWaiverButton
-          studentId={student.id}
-          yearId={schoolYear.id}
-          studentName={studentName || "this student"}
-          recipientEmail={primary?.email ?? ""}
-          recipientName={
-            primary
-              ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
-              : undefined
-          }
-          status={waiverStatus}
-          onSent={onChanged}
-        />
+        {isResidential ? (
+          <SendLiabilityWaiverButton
+            studentId={student.id}
+            yearId={schoolYear.id}
+            studentName={studentName || "this student"}
+            recipientEmail={signerReady ? signer.signer_email : ""}
+            recipientName={signerReady ? signerName : undefined}
+            status={waiverStatus}
+            copiedNote={RESIDENTIAL_COPIED_NOTE}
+            onSent={onChanged}
+          />
+        ) : (
+          <SendLiabilityWaiverButton
+            studentId={student.id}
+            yearId={schoolYear.id}
+            studentName={studentName || "this student"}
+            recipientEmail={primary?.email ?? ""}
+            recipientName={
+              primary
+                ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
+                : undefined
+            }
+            status={waiverStatus}
+            onSent={onChanged}
+          />
+        )}
       </>
+    ) : null;
+
+  // Residential only: the per-student enrollment agreement goes to the
+  // signer too. Everyone else signs the family agreement in the flow.
+  const agreementStatus = clean(packet?.addition_enrollment_agreement_status);
+  const enrollmentActions =
+    isResidential &&
+    enrollment.kind !== "signed" &&
+    schoolYear?.id &&
+    student.id ? (
+      <SendLiabilityWaiverButton
+        docType="enrollment_agreement"
+        studentId={student.id}
+        yearId={schoolYear.id}
+        studentName={studentName || "this student"}
+        recipientEmail={signerReady ? signer.signer_email : ""}
+        recipientName={signerReady ? signerName : undefined}
+        status={agreementStatus}
+        copiedNote={RESIDENTIAL_COPIED_NOTE}
+        onSent={onChanged}
+      />
     ) : null;
 
   const signedCount = [enrollment, waiver, lunch, withdrawal].filter(
@@ -4329,12 +4385,20 @@ function SignedDocumentsCard({
         </div>
       </CardHeader>
       <CardContent className="p-0 bg-white">
+        {isResidential ? (
+          <DocumentSignerSection
+            packetId={packet?.id ?? null}
+            signer={signer}
+            onChanged={onChanged}
+          />
+        ) : null}
         <ul className="divide-y">
           <SignedDocRow
             title="Enrollment Agreement"
-            scope={additionId ? "This student" : "Family"}
+            scope={perStudentAgreement ? "This student" : "Family"}
             state={enrollment}
             downloadName={fileName("enrollment-agreement")}
+            actions={enrollmentActions}
           />
           <SignedDocRow
             title="Participation Agreement & Liability Waiver"
@@ -4358,6 +4422,186 @@ function SignedDocumentsCard({
         </ul>
       </CardContent>
     </Card>
+  );
+}
+
+const RESIDENTIAL_COPIED_NOTE =
+  "the caregiver on the family and the admissions inbox are copied";
+
+/**
+ * Residential placements: who signs this student's waiver and
+ * enrollment agreement this school year. The case worker or legal
+ * guardian, not the caregiver who holds the portal login. Shown at the
+ * top of the Signed Documents card; read view with an Edit toggle.
+ *
+ * Saves through the admin packet PATCH (validated there). Xano drops
+ * empty strings, so a field can be replaced but not blanked; a blank
+ * input just leaves the old value.
+ */
+function DocumentSignerSection({
+  packetId,
+  signer,
+  onChanged,
+}: {
+  packetId: number | null;
+  signer: ResidentialSigner;
+  onChanged?: () => void | Promise<unknown>;
+}) {
+  const complete = isSignerComplete(signer);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<ResidentialSigner>(signer);
+
+  function startEdit() {
+    setDraft({ ...signer, signer_role: signer.signer_role || SIGNER_ROLES[0] });
+    setEditing(true);
+  }
+
+  async function save() {
+    if (!packetId) return;
+    const next = {
+      ...draft,
+      signer_first_name: draft.signer_first_name.trim(),
+      signer_last_name: draft.signer_last_name.trim(),
+      signer_email: draft.signer_email.trim(),
+    };
+    if (
+      !next.signer_role ||
+      !next.signer_first_name ||
+      !next.signer_last_name ||
+      !isValidSignerEmail(next.signer_email)
+    ) {
+      toast.error("Role, first name, last name and a valid email are required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration/${packetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      // Keep the spinner until the refreshed packet is on screen.
+      await onChanged?.();
+      setEditing(false);
+      toast.success("Document signer saved.");
+    } catch (err) {
+      console.error("[DocumentSignerSection.save]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="border-b bg-muted/20 px-4 py-3 space-y-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">Document signer</p>
+          <p className="text-xs text-muted-foreground">
+            The case worker or legal guardian signs this student&rsquo;s
+            waiver and enrollment agreement. The caregiver is copied.
+          </p>
+        </div>
+        {!editing && packetId ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            onClick={startEdit}
+          >
+            <Pencil className="size-3.5 mr-1.5" />
+            {complete ? "Edit" : "Add signer"}
+          </Button>
+        ) : null}
+      </div>
+
+      {editing ? (
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <EditSelectField
+              label="Role"
+              value={draft.signer_role}
+              onChange={(v) => setDraft((d) => ({ ...d, signer_role: v }))}
+              options={SIGNER_ROLES}
+              disabled={saving}
+            />
+            <EditField
+              label="First name"
+              value={draft.signer_first_name}
+              onChange={(v) => setDraft((d) => ({ ...d, signer_first_name: v }))}
+              disabled={saving}
+            />
+            <EditField
+              label="Last name"
+              value={draft.signer_last_name}
+              onChange={(v) => setDraft((d) => ({ ...d, signer_last_name: v }))}
+              disabled={saving}
+            />
+            <EditField
+              label="Email"
+              type="email"
+              value={draft.signer_email}
+              onChange={(v) => setDraft((d) => ({ ...d, signer_email: v }))}
+              disabled={saving}
+            />
+            <Field>
+              <FieldLabel className="text-xs">Phone (optional)</FieldLabel>
+              <PhoneInput
+                value={draft.signer_phone}
+                onChange={(v) => setDraft((d) => ({ ...d, signer_phone: v }))}
+                disabled={saving}
+              />
+            </Field>
+            <EditField
+              label="Agency (optional)"
+              value={draft.signer_agency}
+              onChange={(v) => setDraft((d) => ({ ...d, signer_agency: v }))}
+              disabled={saving}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={saving}
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="button" size="sm" disabled={saving} onClick={() => void save()}>
+              {saving ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : null}
+              Save signer
+            </Button>
+          </div>
+        </div>
+      ) : complete ? (
+        <p className="text-sm">
+          <span className="font-medium">{signerFullName(signer)}</span>
+          <span className="text-muted-foreground">
+            {" · "}
+            {signer.signer_role}
+            {signer.signer_agency ? `, ${signer.signer_agency}` : ""}
+            {" · "}
+            {signer.signer_email}
+            {signer.signer_phone ? ` · ${formatUSPhone(signer.signer_phone)}` : ""}
+          </span>
+        </p>
+      ) : (
+        <p className="text-sm text-amber-800">
+          {packetId
+            ? "No case worker or legal guardian yet. Add one before sending the waiver or enrollment agreement."
+            : "No registration packet for this year yet."}
+        </p>
+      )}
+    </div>
   );
 }
 

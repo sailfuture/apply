@@ -2442,6 +2442,16 @@ export interface XanoStudentRegistration {
   addition_enrollment_agreement_status?: string | null;
   addition_enrollment_agreement_sent_at?: string | null;
   addition_enrollment_agreement_pdf_url?: string | null;
+  /** Residential placements only: the case worker / legal guardian who
+   *  signs the waiver and enrollment agreement (see
+   *  `lib/residential-signer.ts`). Residential agreements reuse the
+   *  `addition_enrollment_agreement_*` slot above. */
+  signer_role?: string | null;
+  signer_first_name?: string | null;
+  signer_last_name?: string | null;
+  signer_email?: string | null;
+  signer_phone?: string | null;
+  signer_agency?: string | null;
   /** Unix ms the parent submitted this student's registration for admin
    *  confirmation (0 = not yet). */
   addition_registration_submitted_at?: number | null;
