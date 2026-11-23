@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { WrenchIcon } from "lucide-react";
+import { Loader2Icon, WrenchIcon } from "lucide-react";
 import { useOptionalApplicationFlow } from "@/contexts/application-flow-context";
 
 /**
@@ -14,7 +14,7 @@ import { useOptionalApplicationFlow } from "@/contexts/application-flow-context"
  * (auth provider down, API outage, network blip) with a single
  * friendly message.
  */
-export function ServiceUnavailable({ onRetry }: { onRetry?: () => void }) {
+export function ServiceUnavailable({ onRetry }: { onRetry?: () => unknown }) {
   // Inside the step layout the bottom bar would otherwise keep offering
   // "Complete <section>" underneath a card that says the page didn't
   // load. Hide it while the card is up and put it back as it was.
@@ -28,6 +28,15 @@ export function ServiceUnavailable({ onRetry }: { onRetry?: () => void }) {
     // `wasHidden` is read once, at mount, on purpose.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setHideBottomBar]);
+
+  const [retrying, setRetrying] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   return (
     // Full-viewport by default, so the card sits where the loading
@@ -54,12 +63,33 @@ export function ServiceUnavailable({ onRetry }: { onRetry?: () => void }) {
         <CardContent>
           <Button
             variant="outline"
-            onClick={() => {
-              if (onRetry) onRetry();
-              else window.location.reload();
+            disabled={retrying}
+            onClick={async () => {
+              if (!onRetry) {
+                setRetrying(true);
+                window.location.reload();
+                return;
+              }
+              setRetrying(true);
+              // Callers that flip their own loading state unmount this card
+              // on the next render. Callers that revalidate SWR return the
+              // mutate() promise, and SWR keeps `error` set until a fetch
+              // succeeds — so the card used to just sit there, and stayed
+              // if the fetch failed again. If we're still on screen once
+              // the retry settles, fall back to a full reload so the button
+              // always visibly does something.
+              try {
+                await onRetry();
+              } catch {
+                // Handled by the reload below.
+              }
+              window.setTimeout(() => {
+                if (mounted.current) window.location.reload();
+              }, 500);
             }}
           >
-            Try again
+            {retrying && <Loader2Icon className="size-4 animate-spin" />}
+            {retrying ? "Trying again…" : "Try again"}
           </Button>
         </CardContent>
       </Card>
