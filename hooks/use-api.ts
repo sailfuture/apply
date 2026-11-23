@@ -177,9 +177,9 @@ export type ApiCacheReader = <T>(key: string) => T | undefined;
  * through the hooks above. Each of them started every visit empty,
  * behind a skeleton, until its own fetch came back — although the
  * header and the side nav had the same responses in the SWR cache all
- * along. The Family and Students steps now fill their first render
- * from this reader and run their usual load behind it; Financial Aid
- * and Initial Testing still load the old way.
+ * along. All four steps (Family, Students, Financial Aid, Initial
+ * Testing) now fill their first render from this reader and run their
+ * usual load behind it.
  *
  * Reads without subscribing and never fetches. Returns `undefined`
  * for everything while the page is hydrating, so the first client

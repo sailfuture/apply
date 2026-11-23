@@ -9,6 +9,7 @@ import { useStudentRegistrationProgress } from "@/hooks/use-student-registration
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ServiceUnavailable } from "@/components/service-unavailable";
+import { SignedPdfFrame } from "@/components/signed-pdf-frame";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -41,7 +42,6 @@ export default function LunchLetterPage() {
   const { data: appsData, error: appsError } = useApplications();
   const { mutate: swrMutate } = useSWRConfig();
 
-  const [pdfLoaded, setPdfLoaded] = useState(false);
   const [signingLoading, setSigningLoading] = useState(false);
   // Signed in the embed, waiting for the server to confirm with PandaDoc.
   const [finalizing, setFinalizing] = useState(false);
@@ -56,6 +56,12 @@ export default function LunchLetterPage() {
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const creatingRef = useRef(false);
   const verifyOnMountRef = useRef(false);
+  // The document whose signing has been announced. When the widget
+  // reports "completed" the poll is restarted on its fast schedule, but a
+  // check from the earlier loop can still be in flight; it then carries
+  // on beside the new one, and each showed the success toast when it saw
+  // the document completed. The second now finds the document here.
+  const announcedDocRef = useRef<string | null>(null);
 
   useEffect(() => {
     setPageTitle("Lunch Letter");
@@ -132,7 +138,10 @@ export default function LunchLetterPage() {
               await refreshRegProgress();
               setSigningSession(null);
               setFinalizing(false);
-              toast.success("Lunch letter signed. Thank you!");
+              if (announcedDocRef.current !== documentId) {
+                announcedDocRef.current = documentId;
+                toast.success("Lunch letter signed. Thank you.");
+              }
               return;
             }
           }
@@ -163,8 +172,14 @@ export default function LunchLetterPage() {
         }),
       });
       if (!res.ok) {
+        // The route's error is the provider's raw message (status code
+        // and JSON included): fine for the log, not for a parent.
         const body = await res.json().catch(() => null);
-        toast.error(body?.error ?? "Failed to prepare the lunch letter.");
+        console.error(
+          "Lunch letter could not be prepared:",
+          body?.error ?? res.status
+        );
+        toast.error("We couldn't prepare your lunch letter. Please try again.");
         setPrepFailed(true);
         return;
       }
@@ -227,10 +242,16 @@ export default function LunchLetterPage() {
       .catch(() => {});
   }, [loading, isCompleted, docId, statusUrl, refreshRegProgress]);
 
+  // The download route only serves an envelope whose status on this row
+  // is "completed". The letter can be complete without one: the office
+  // verifies a paper copy, which sets `isLunchLetter` and leaves an
+  // unsigned envelope's status as it was. There is no signed copy to
+  // show then, and asking for it only ever gets the route's refusal.
+  const envelopeSigned = regProgress?.lunch_letter_status === "completed";
   const pdfUrl = useMemo(() => {
-    if (!isCompleted || !docId || !app) return null;
+    if (!isCompleted || !envelopeSigned || !docId || !app) return null;
     return `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`;
-  }, [isCompleted, docId, app]);
+  }, [isCompleted, envelopeSigned, docId, app]);
 
   // The widget effect below must depend on the session alone: re-running
   // it tears the widget down and reopens the document, discarding what
@@ -335,44 +356,39 @@ export default function LunchLetterPage() {
         <h1 className="text-2xl font-semibold text-center xl:text-left">
           Free &amp; Reduced Lunch Letter
         </h1>
+        {/* Once preparing has failed nothing is on its way, so the line
+            says that (beside the "Try again" below) rather than "being
+            prepared". */}
         <p className="text-muted-foreground text-sm mt-1 text-center xl:text-left">
           {isCompleted
             ? "This document has been signed and completed."
             : signingSession
               ? "Every family completes this form each school year, whether or not you expect to qualify. Fill it out and sign below."
-              : "Your lunch letter is being prepared. It will load in this page as soon as it's ready."}
+              : prepFailed
+                ? "We couldn't prepare your lunch letter. Please try again, or contact the school if it keeps happening."
+                : "Your lunch letter is being prepared. It will load in this page as soon as it's ready."}
         </p>
       </div>
 
+      {/* The signed PDF with its Download button. `SignedPdfFrame` waits
+          for the download route to answer with a PDF before it mounts
+          the iframe: just after signing, PandaDoc can still be producing
+          the file, and the route's JSON error showed in the frame as raw
+          text. */}
       {isCompleted && pdfUrl && (
-        <div
-          className="relative rounded-lg border overflow-hidden"
-          style={{ height: "70vh" }}
-        >
-          {!pdfLoaded && (
-            <div className="absolute inset-0 flex items-center justify-center bg-muted/30">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="size-5 animate-spin" />
-                <span className="text-sm">Loading signed document...</span>
-              </div>
-            </div>
-          )}
-          <iframe
-            src={pdfUrl}
-            onLoad={() => setPdfLoaded(true)}
-            className={`w-full h-full border-none transition-opacity duration-300 ${
-              pdfLoaded ? "opacity-100" : "opacity-0"
-            }`}
-            title="Signed Free and Reduced Lunch Letter"
-          />
-        </div>
+        <SignedPdfFrame
+          src={pdfUrl}
+          title="Signed Free and Reduced Lunch Letter"
+          downloadName="free-and-reduced-lunch-letter.pdf"
+        />
       )}
 
+      {/* The 720px floor only applies from `xl` up, where the layout has
+          no bottom bar pinned to the screen. On a phone it made the embed
+          taller than the space between the header and that bar, and the
+          widget's own controls ended up behind it; 80vh fits. */}
       {!isCompleted && signingSession && (
-        <div
-          className="relative rounded-lg border overflow-hidden bg-white w-full"
-          style={{ height: "80vh", minHeight: 720 }}
-        >
+        <div className="relative rounded-lg border overflow-hidden bg-white w-full h-[80vh] xl:min-h-[720px]">
           <style>{`
             #${EMBED_ID} {
               position: absolute;
@@ -437,16 +453,6 @@ export default function LunchLetterPage() {
               </div>
             )}
           </div>
-        </div>
-      )}
-
-      {isCompleted && pdfUrl && (
-        <div className="border-t pt-6 pb-6">
-          <Button asChild variant="outline" className="w-full bg-white">
-            <a href={pdfUrl} download="free-and-reduced-lunch-letter.pdf">
-              Download Document
-            </a>
-          </Button>
         </div>
       )}
     </div>

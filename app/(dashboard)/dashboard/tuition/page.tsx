@@ -408,7 +408,7 @@ export default function DashboardTuitionPage() {
         </div>
       ) : (
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border bg-white">
+          <div className="overflow-hidden rounded-frame-inner border bg-white">
             <table className="w-full text-sm">
               <tbody>
                 {studentRows.map((row, idx) => (
@@ -705,7 +705,7 @@ function BillingSkeleton() {
 function BreakdownSkeleton() {
   return (
     <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-      <div className="overflow-hidden rounded-lg border bg-white">
+      <div className="overflow-hidden rounded-frame-inner border bg-white">
         {/* Student group header */}
         <div className="bg-muted/40 px-4 py-3">
           <Skeleton className="h-4 w-52" />

@@ -1229,7 +1229,7 @@ function RegistrationSideNav({
 
   return (
     <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-      <div className="overflow-hidden rounded-lg border">
+      <div className="overflow-hidden rounded-frame-inner border">
         <div className="divide-y">
           <Link
             href={backHref}

@@ -156,9 +156,19 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
+    // PandaDoc didn't hand over the PDF. For a short while after signing
+    // that is expected: PandaDoc is still producing the signed file. The
+    // detail (PandaDoc's status code and response body, in `err`) is for
+    // the log only. This body used to carry it, and it is what an
+    // <iframe> or a browser tab pointed at this URL shows the parent as
+    // text, so it is one plain sentence instead. The signing pages wait
+    // for a PDF content type before showing anything (`SignedPdfFrame`).
     console.error("PandaDoc download error:", err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to download PDF" },
+      {
+        error:
+          "The signed copy isn't available yet. Please try again in a minute.",
+      },
       { status: 500 }
     );
   }

@@ -479,7 +479,7 @@ export default function StudentDetailPage() {
           </p>
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             <div className="divide-y text-sm">
               {requiredDocs.map(({ key, label, confirmKey }) => (
                 <DocRow
@@ -509,7 +509,7 @@ export default function StudentDetailPage() {
           </p>
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             <div className="divide-y text-sm">
               {optionalDocs.map(({ key, label }) => (
                 <DocRow
@@ -573,7 +573,7 @@ function SectionSkeleton({ rows }: { rows: number }) {
     <div>
       <Skeleton className="h-4 w-40 mb-3" />
       <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-        <div className="overflow-hidden rounded-lg border divide-y">
+        <div className="overflow-hidden rounded-frame-inner border divide-y">
           {Array.from({ length: rows }).map((_, i) => (
             <div
               key={i}
@@ -595,7 +595,7 @@ function SectionSkeleton({ rows }: { rows: number }) {
 function DetailTable({ rows }: { rows: [string, string][] }) {
   return (
     <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-      <div className="overflow-hidden rounded-lg border">
+      <div className="overflow-hidden rounded-frame-inner border">
         <dl className="divide-y text-sm">
           {rows.map(([label, value]) => (
             <div

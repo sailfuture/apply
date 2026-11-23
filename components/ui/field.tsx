@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useEffect, useId, useMemo, useRef } from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
@@ -69,11 +69,78 @@ const fieldVariants = cva(
   }
 )
 
+/**
+ * The controls a field's label can name through `for`. Each is a
+ * "labelable" element, so the browser also sends a click on the label
+ * to it. File inputs are left out on purpose: a click on the label
+ * would open the file picker, and the uploader names its own input.
+ */
+const FIELD_CONTROL_SELECTOR = [
+  'input:not([type="hidden"]):not([type="file"])',
+  "textarea",
+  "select",
+  'button[role="combobox"]',
+  'button[role="checkbox"]',
+  'button[role="switch"]',
+].join(", ")
+
+/**
+ * Give a field's control its label.
+ *
+ * A `<FieldLabel>` and an `<Input>` sitting side by side in a `<Field>`
+ * are not connected by anything a browser or a screen reader can see:
+ * the input was announced as "edit text" with only its placeholder to
+ * go on, and clicking the label did nothing. Almost every form in the
+ * app is written that way, so the field connects them itself: its own
+ * label gets `for`, pointing at its own first control (which is given
+ * an id when it has none).
+ *
+ * Done on the DOM after render because the label and the control are
+ * separate components that know nothing of each other, and a control
+ * can be any of several (input, textarea, select trigger, checkbox,
+ * switch). Left alone when the page already set `for`, when the label
+ * wraps its control (a choice card), and for nested fields, which wire
+ * themselves.
+ */
+function useFieldLabelWiring(rootRef: React.RefObject<HTMLDivElement | null>) {
+  const autoId = useId()
+  // No dependency list: the control inside a field can be swapped by a
+  // render this component never sees (a select replaced by an input).
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const own = (el: Element) => el.closest('[data-slot="field"]') === root
+    const label = Array.from(
+      root.querySelectorAll<HTMLLabelElement>('label[data-slot="field-label"]')
+    ).find(own)
+    if (!label) return
+    const wiredByField = label.dataset.fieldWired === "true"
+    if (label.hasAttribute("for") && !wiredByField) return
+    const control = Array.from(
+      root.querySelectorAll<HTMLElement>(FIELD_CONTROL_SELECTOR)
+    ).find((el) => own(el) && !label.contains(el))
+    if (!control || label.querySelector(FIELD_CONTROL_SELECTOR)) {
+      if (wiredByField) {
+        label.removeAttribute("for")
+        delete label.dataset.fieldWired
+      }
+      return
+    }
+    if (!control.id) control.id = `${autoId}-control`
+    if (label.htmlFor !== control.id) {
+      label.htmlFor = control.id
+      label.dataset.fieldWired = "true"
+    }
+  })
+}
+
 function Field({
   className,
   orientation = "vertical",
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof fieldVariants>) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  useFieldLabelWiring(rootRef)
   return (
     <div
       role="group"
@@ -81,6 +148,9 @@ function Field({
       data-orientation={orientation}
       className={cn(fieldVariants({ orientation }), className)}
       {...props}
+      // After `props`: the wiring above needs this element. Nothing in
+      // the app passes a ref to a field.
+      ref={rootRef}
     />
   )
 }

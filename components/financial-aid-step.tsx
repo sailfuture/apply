@@ -546,6 +546,10 @@ function changedSince(
   return changed;
 }
 
+/** The button inside each row of the scholarship choice table. */
+const CHOICE_ROW_BUTTON =
+  "rounded-sm text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
+
 function formatCurrencyDisplay(value: number): string {
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 0,
@@ -606,8 +610,12 @@ function CurrencyInput({
   disabled,
   placeholder,
   className: extraClassName,
+  "aria-labelledby": ariaLabelledBy,
 }: {
   id?: string;
+  /** Id of the text that names the field, for one that sits under a
+   *  heading instead of a `<FieldLabel>`. */
+  "aria-labelledby"?: string;
   /** `null` = untouched (placeholder shown); a number = explicitly
    *  entered amount, including `0` ("yes, I confirm no income from
    *  this source"). */
@@ -652,6 +660,7 @@ function CurrencyInput({
       </span>
       <Input
         id={id}
+        aria-labelledby={ariaLabelledBy}
         className={`pl-7 ${extraClassName ?? ""}`}
         value={display}
         placeholder={placeholder ?? "0"}
@@ -2219,7 +2228,7 @@ export function FinancialAidStep({
                       SUFS Award ID
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                          <button type="button" aria-label="Where to find the SUFS Award ID" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
                             <HelpCircle className="size-3.5" />
                           </button>
                         </TooltipTrigger>
@@ -2243,7 +2252,12 @@ export function FinancialAidStep({
                     pattern="[0-9]*"
                     maxLength={9}
                     placeholder="000000000"
-                    className={`w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${!app.sufs_award_id ? "border-2 border-red-400" : ""}`}
+                    // No red outline while empty: the Award ID is not
+                    // required (a student may not have been awarded
+                    // yet), and red on an optional field reads as an
+                    // error. The card's amber icon already says it is
+                    // still to come.
+                    className="w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     value={app.sufs_award_id || ""}
                     // Mid-year addition: the enrolled students' IDs are
                     // already on file — only the added student's is open.
@@ -2492,12 +2506,12 @@ export function FinancialAidStep({
           </div>
 
           <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-hidden rounded-lg border">
+            <div className="overflow-hidden rounded-frame-inner border">
               <table className="w-full text-sm">
                 <tbody className="divide-y">
                   {/* Choose not to participate */}
                   <tr
-                    className={`transition-colors cursor-pointer ${
+                    className={`transition-colors cursor-pointer active:bg-muted/60 ${
                       scholarshipChoice === "none"
                         ? "bg-gray-50 dark:bg-muted/30 hover:bg-gray-100 dark:hover:bg-muted/50"
                         : "hover:bg-muted/30"
@@ -2520,7 +2534,25 @@ export function FinancialAidStep({
                       </div>
                     </td>
                     <td className="px-2 py-4">
-                      <p className="font-medium">Choose not to participate</p>
+                      <p className="font-medium">
+                        {/* A real button in each row: the row's own
+                            click handler is mouse-only, so the three
+                            options could not be reached with Tab or
+                            found by a screen reader. The row stays the
+                            mouse target; the button stops the click
+                            from running twice. */}
+                        <button
+                          type="button"
+                          aria-pressed={scholarshipChoice === "none"}
+                          className={CHOICE_ROW_BUTTON}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleChooserRowClick("none");
+                          }}
+                        >
+                          Choose not to participate
+                        </button>
+                      </p>
                     </td>
                     <td className="px-4 py-4 w-10 text-muted-foreground">
                       <div className="flex size-7 items-center justify-center rounded-md border border-border">
@@ -2531,7 +2563,7 @@ export function FinancialAidStep({
 
                   {/* SNAP benefits */}
                   <tr
-                    className={`transition-colors cursor-pointer ${
+                    className={`transition-colors cursor-pointer active:bg-muted/60 ${
                       scholarshipChoice === "snap"
                         ? "bg-gray-50 dark:bg-muted/30 hover:bg-gray-100 dark:hover:bg-muted/50"
                         : "hover:bg-muted/30"
@@ -2562,8 +2594,18 @@ export function FinancialAidStep({
                     </td>
                     <td className="px-2 py-4">
                       <p className="font-medium">
-                        I receive SNAP benefits or have a Free/Reduced Meal
-                        Status verification letter
+                        <button
+                          type="button"
+                          aria-pressed={scholarshipChoice === "snap"}
+                          className={CHOICE_ROW_BUTTON}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleChooserRowClick("snap");
+                          }}
+                        >
+                          I receive SNAP benefits or have a Free/Reduced Meal
+                          Status verification letter
+                        </button>
                       </p>
                     </td>
                     <td className="px-4 py-4 w-10 text-muted-foreground">
@@ -2575,7 +2617,7 @@ export function FinancialAidStep({
 
                   {/* Continue scholarship */}
                   <tr
-                    className={`transition-colors cursor-pointer ${
+                    className={`transition-colors cursor-pointer active:bg-muted/60 ${
                       scholarshipChoice === "full"
                         ? "bg-gray-50 dark:bg-muted/30 hover:bg-gray-100 dark:hover:bg-muted/50"
                         : "hover:bg-muted/30"
@@ -2611,7 +2653,17 @@ export function FinancialAidStep({
                             It used to say "Continue the…" as soon as the
                             family had a scholarship record at all — and
                             declining creates one. */}
-                        Apply for the SailFuture Opportunity Scholarship
+                        <button
+                          type="button"
+                          aria-pressed={scholarshipChoice === "full"}
+                          className={CHOICE_ROW_BUTTON}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleChooserRowClick("full");
+                          }}
+                        >
+                          Apply for the SailFuture Opportunity Scholarship
+                        </button>
                       </p>
                     </td>
                     <td className="px-4 py-4 w-10 text-muted-foreground">
@@ -3018,9 +3070,12 @@ export function FinancialAidStep({
                     }
                   }}
                   disabled={isReadonly}
+                  // Named by the phrase beside it without making that
+                  // phrase clickable (see the note above).
+                  aria-labelledby="gov_benefits_text"
                   className="size-5 cursor-pointer rounded accent-primary"
                 />
-                <span className="text-sm select-none">My household receives government assistance (SNAP, SSI, etc.)</span>
+                <span id="gov_benefits_text" className="text-sm select-none">My household receives government assistance (SNAP, SSI, etc.)</span>
               </div>
               <AnimatePresence initial={false}>
               {govBenefits && (
@@ -3110,6 +3165,7 @@ export function FinancialAidStep({
                             variant="outline"
                             size="icon"
                             className="size-8 text-muted-foreground hover:text-red-600"
+                            aria-label="Remove this benefit"
                             onClick={() => setPendingDelete({ type: "benefit", id: benefit.id, label: "this benefit" })}
                           >
                             <Trash2 className="size-4" />
@@ -3269,9 +3325,10 @@ export function FinancialAidStep({
                   checked={noContributing}
                   onChange={(e) => setNoContributing(e.target.checked)}
                   disabled={isReadonly}
+                  aria-labelledby="no_contributing_text"
                   className="size-5 cursor-pointer rounded accent-primary"
                 />
-                <span className="text-sm select-none">
+                <span id="no_contributing_text" className="text-sm select-none">
                   No contributing members in the household
                 </span>
               </div>
@@ -3351,6 +3408,7 @@ export function FinancialAidStep({
                               variant="outline"
                               size="icon"
                               className="size-8 text-muted-foreground hover:text-red-600"
+                              aria-label={`Remove Income Earner ${idx + 1}`}
                               onClick={() => setPendingDelete({ type: "member", id: member.id, label: `Income Earner ${idx + 1}` })}
                             >
                               <Trash2 className="size-4" />
@@ -3868,6 +3926,7 @@ export function FinancialAidStep({
                               variant="outline"
                               size="icon"
                               className="size-8 text-muted-foreground hover:text-red-600"
+                              aria-label={`Remove Property ${idx + 1}`}
                               onClick={() => setPendingDelete({ type: "home", id: home.id, label: `Property ${idx + 1}` })}
                             >
                               <Trash2 className="size-4" />
@@ -4050,6 +4109,7 @@ export function FinancialAidStep({
                               variant="outline"
                               size="icon"
                               className="size-8 text-muted-foreground hover:text-red-600"
+                              aria-label={`Remove Vehicle ${idx + 1}`}
                               onClick={() => setPendingDelete({ type: "vehicle", id: vehicle.id, label: `Vehicle ${idx + 1}` })}
                             >
                               <Trash2 className="size-4" />
@@ -4222,7 +4282,7 @@ export function FinancialAidStep({
           </CardHeader>
           <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             <section>
-              <h3 className="text-lg font-medium">
+              <h3 id="family-contribution-heading" className="text-lg font-medium">
                 How much can your family contribute towards tuition each month?
               </h3>
               <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
@@ -4230,7 +4290,10 @@ export function FinancialAidStep({
                 each month.
               </p>
               <Field className="max-w-xs">
+                {/* Named by the question above it; there is no label
+                    element here for the field to pick up. */}
                 <CurrencyInput
+                  aria-labelledby="family-contribution-heading"
                   value={familyContribution}
                   onChange={setFamilyContribution}
                   disabled={isReadonly}
@@ -4242,7 +4305,7 @@ export function FinancialAidStep({
             <Separator />
 
             <section>
-              <h3 className="text-lg font-medium">
+              <h3 id="advocacy-letter-heading" className="text-lg font-medium">
                 Tell Us About Your Family&rsquo;s Financial Situation
               </h3>
               <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
@@ -4255,6 +4318,7 @@ export function FinancialAidStep({
                 it&rsquo;s important for your child.
               </p>
               <textarea
+                aria-labelledby="advocacy-letter-heading"
                 className={`flex min-h-[120px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!advocacyLetter.trim() ? "border-2 border-red-400" : "border-input"}`}
                 value={advocacyLetter}
                 onChange={(e) => setAdvocacyLetter(e.target.value)}
@@ -4535,6 +4599,7 @@ function SingleFileUpload({
               variant="ghost"
               size="icon"
               className="size-7 shrink-0"
+              aria-label="Remove file"
               onClick={() => setConfirmRemove(true)}
             >
               <X className="size-4" />
@@ -4808,6 +4873,7 @@ function MultiFileUpload({
                 variant="ghost"
                 size="icon"
                 className="size-7 shrink-0"
+                aria-label="Remove file"
                 onClick={() => setRemoveIndex(index)}
               >
                 <X className="size-4" />

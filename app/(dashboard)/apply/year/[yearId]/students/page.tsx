@@ -1264,6 +1264,7 @@ export default function StudentsStepPage() {
                         variant="outline"
                         size="icon"
                         className="size-8 text-muted-foreground hover:text-red-600"
+                        aria-label={`Remove ${`${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() || "this student"}`}
                         onClick={() =>
                           setPendingDeleteStudent({ appId: app.id, name: `${student.first_name} ${student.last_name}` })
                         }

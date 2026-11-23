@@ -235,7 +235,7 @@ export default function StorePage() {
               ) : null}
             </div>
             <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-              <div className="overflow-hidden rounded-lg border bg-white">
+              <div className="overflow-hidden rounded-frame-inner border bg-white">
                 {summary.count === 0 ? (
                   <p className="px-4 py-8 text-center text-sm text-muted-foreground">
                     No purchases yet — items you buy above will appear here
@@ -314,7 +314,7 @@ export default function StorePage() {
                 School devices assigned to your students
               </h2>
               <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-                <div className="overflow-hidden rounded-lg border bg-white">
+                <div className="overflow-hidden rounded-frame-inner border bg-white">
                   <Table className="text-sm">
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">

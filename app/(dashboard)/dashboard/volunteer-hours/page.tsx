@@ -300,7 +300,7 @@ export default function VolunteerHoursPage() {
       <div>
         <h2 className="text-sm font-semibold mb-3">Entry history</h2>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border bg-white">
+          <div className="overflow-hidden rounded-frame-inner border bg-white">
             {loading ? (
               <Skeleton className="h-32 w-full" />
             ) : yearEntries.length === 0 ? (
@@ -440,7 +440,7 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
         </p>
       </div>
       <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-        <div className="overflow-hidden rounded-lg border bg-white divide-y">
+        <div className="overflow-hidden rounded-frame-inner border bg-white divide-y">
           {events.map((ev) => {
             const c = eventColor(ev.color);
             const needs = ev.items ?? [];
@@ -624,7 +624,7 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
             </p>
           </div>
           <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-x-auto rounded-lg border bg-white">
+            <div className="overflow-x-auto rounded-frame-inner border bg-white">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/30">
                   <tr>

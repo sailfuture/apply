@@ -691,6 +691,7 @@ function DocumentUpload({
               size="icon"
               className="size-7 shrink-0"
               disabled={locked}
+              aria-label={`Remove ${(file.name as string) || `uploaded file ${idx + 1}`}`}
               onClick={() => setConfirmRemove(idx)}
             >
               <X className="size-4" />
@@ -709,6 +710,9 @@ function DocumentUpload({
         maxSize={10 * 1024 * 1024}
         accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
         className="w-full"
+        // Names the file input for a screen reader ("Birth Certificate"
+        // rather than "File upload" nine times over).
+        label={label}
         value={pendingFiles}
         onValueChange={handleFilesChange}
         onFileReject={() => setRejected(true)}
@@ -757,7 +761,12 @@ function DocumentUpload({
               <FileUploadItemPreview />
               <FileUploadItemMetadata />
               <FileUploadItemDelete asChild>
-                <Button variant="ghost" size="icon" className="size-7">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  aria-label={`Remove ${f.name} from this upload`}
+                >
                   <X className="size-4" />
                 </Button>
               </FileUploadItemDelete>
@@ -951,6 +960,12 @@ export default function RegistrationPage() {
   const [docLoaded, setDocLoaded] = useState(false);
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The waiver whose signing has been announced. Two paths see a signed
+  // waiver, in either order: the embed's own "completed" event and the
+  // status poll, which keeps running after the embed has reported. Each
+  // used to show the success toast, so the parent got it twice.
+  // Whichever gets there second now finds the document here.
+  const announcedWaiverRef = useRef<string | null>(null);
 
   // Derived: year applications and enrolled students. Inactive apps
   // (`isActive=false`) are excluded — when a parent removes a student
@@ -1145,7 +1160,10 @@ export default function RegistrationPage() {
           }
           setSigningSession(null);
           setSigningStudentId(null);
-          toast.success("Liability waiver signed successfully.");
+          if (announcedWaiverRef.current !== documentId) {
+            announcedWaiverRef.current = documentId;
+            toast.success("Liability waiver signed successfully.");
+          }
           pollingRef.current = null;
           return;
         }
@@ -1186,8 +1204,16 @@ export default function RegistrationPage() {
         }),
       });
       if (!res.ok) {
+        // The route's error is the provider's raw message (status code
+        // and JSON included): fine for the log, not for a parent.
         const body = await res.json().catch(() => null);
-        toast.error(body?.error ?? "Failed to prepare the withdrawal form.");
+        console.error(
+          "Withdrawal form could not be prepared:",
+          body?.error ?? res.status
+        );
+        toast.error(
+          "We couldn't prepare the withdrawal form. Please try again, or contact the school if it keeps happening."
+        );
         return;
       }
       const data = await res.json();
@@ -1285,7 +1311,12 @@ export default function RegistrationPage() {
         signingInstanceRef.current = null;
       }
 
-      const signing = new Signing("pandadoc-reg-signing-embed", { debugMode: true });
+      // `debugMode` only makes the widget log its steps to the console
+      // (event payloads included, which carry the signer's name and
+      // email). Useful while developing, noise on a parent's device.
+      const signing = new Signing("pandadoc-reg-signing-embed", {
+        debugMode: process.env.NODE_ENV !== "production",
+      });
       // Reset the loaded flag every time the embed re-initializes so
       // the overlay re-engages until PandaDoc fires `document.loaded`
       // (or `document.exception`, the failure short-circuit).
@@ -1323,7 +1354,10 @@ export default function RegistrationPage() {
           }
           setSigningSession(null);
           setSigningStudentId(null);
-          toast.success("Liability waiver signed successfully.");
+          if (announcedWaiverRef.current !== signingSession.documentId) {
+            announcedWaiverRef.current = signingSession.documentId;
+            toast.success("Liability waiver signed successfully.");
+          }
         })
         .on("document.exception", (payload: unknown) => {
           console.error("PandaDoc signing exception:", payload);
@@ -2527,6 +2561,7 @@ export default function RegistrationPage() {
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-red-600"
                           disabled={emergencyContacts.length <= 1}
+                          aria-label={`Remove emergency contact ${`${ec.first_name ?? ""} ${ec.last_name ?? ""}`.trim()}`.trim()}
                           title={
                             emergencyContacts.length <= 1
                               ? "At least one emergency contact is required"
@@ -2749,6 +2784,7 @@ export default function RegistrationPage() {
                             variant="outline"
                             size="icon"
                             className="size-8 text-muted-foreground hover:text-red-600"
+                            aria-label={`Remove ${`${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() || "this student"} from registration`}
                             onClick={(e) => {
                               e.stopPropagation();
                               setPendingRemoveStudent({

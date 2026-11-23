@@ -909,6 +909,7 @@ export default function FamilyStepPage() {
                           variant="outline"
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-red-600"
+                          aria-label={`Remove ${`${parent.first_name ?? ""} ${parent.last_name ?? ""}`.trim() || "this parent or guardian"}`}
                           onClick={() => setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` })}
                         >
                           <Trash2 className="size-4" />

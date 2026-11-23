@@ -614,7 +614,7 @@ export default function TuitionPage() {
                           Step Up for Students Award Type
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                              <button type="button" aria-label="About the Step Up for Students award type" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
                                 <HelpCircle className="size-3.5" />
                               </button>
                             </TooltipTrigger>
@@ -646,7 +646,7 @@ export default function TuitionPage() {
                           Opportunity Scholarship Award
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                              <button type="button" aria-label="About the Opportunity Scholarship award" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
                                 <HelpCircle className="size-3.5" />
                               </button>
                             </TooltipTrigger>
@@ -678,7 +678,7 @@ export default function TuitionPage() {
                             Remaining Tuition Amount
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                                <button type="button" aria-label="About the remaining tuition amount" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
                                   <HelpCircle className="size-3.5" />
                                 </button>
                               </TooltipTrigger>

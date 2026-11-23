@@ -821,7 +821,7 @@ export function EnrolledFamilyDashboard({
           </Button>
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             {enrolledStudents.length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                 No students enrolled for this year.
@@ -902,7 +902,7 @@ export function EnrolledFamilyDashboard({
         <div>
           <h2 className="text-sm font-semibold mb-3">Pending Registrations</h2>
           <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-hidden rounded-lg border">
+            <div className="overflow-hidden rounded-frame-inner border">
               <Table className="text-sm table-fixed">
                 <TableBody>
                   {pendingAdditions.map(({ student, app }) => {
@@ -988,7 +988,7 @@ export function EnrolledFamilyDashboard({
           )}
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             {!primary && !secondary ? (
               <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                 No parents on file.{" "}
@@ -1053,7 +1053,7 @@ export function EnrolledFamilyDashboard({
           </Button>
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             {(emergencyContacts ?? []).length === 0 ? (
               <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                 No emergency contacts on file.

@@ -47,15 +47,22 @@ export function PandaDocSigningStep({
   const signingRef = useRef<{ destroy: () => void } | null>(null);
   const onSignedRef = useRef(onSigned);
   onSignedRef.current = onSigned;
+  // The document whose signing has been announced. The poll and the
+  // check the embed's "completed" event makes can both find the same
+  // document completed (a poll already in flight isn't stopped by
+  // clearing its timer), and each used to show the success toast.
+  const announcedDocRef = useRef<string | null>(null);
 
   const statusUrl = (docId: string) =>
     `/api/pandadoc/status?documentId=${encodeURIComponent(docId)}&applicationId=${applicationId}&type=${type}&yearId=${yearId}`;
 
-  async function finish() {
+  async function finish(docId: string) {
     if (pollingRef.current) clearTimeout(pollingRef.current);
     pollingRef.current = null;
     setSession(null);
     await onSignedRef.current();
+    if (announcedDocRef.current === docId) return;
+    announcedDocRef.current = docId;
     toast.success(`${label[0].toUpperCase()}${label.slice(1)} signed.`);
   }
 
@@ -68,7 +75,7 @@ export function PandaDocSigningStep({
         if (res.ok) {
           const data = await res.json();
           if (data.status === "completed") {
-            await finish();
+            await finish(docId);
             return;
           }
           if (data.status === "missing") {
@@ -97,16 +104,26 @@ export function PandaDocSigningStep({
         body: JSON.stringify({ type, applicationId, yearId }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error ?? "Couldn't open the document.");
+      if (!res.ok) {
+        // The route's error is usually the provider's raw message (status
+        // code and JSON included): fine for the log, not for a parent.
+        throw new Error(data?.error ?? `Create failed (${res.status})`);
+      }
       if (data?.completed) {
         // Signed earlier but never synced — the create route synced it.
-        await finish();
+        await finish(data.documentId);
         return;
       }
       setSession({ sessionId: data.sessionId, documentId: data.documentId });
       startPolling(data.documentId);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't open the document.");
+      // Whatever went wrong (the route's error above, a dropped
+      // connection, a failed refetch), the parent gets one plain
+      // sentence. The button is still there to try again.
+      console.error(`The ${label} could not be prepared:`, err);
+      toast.error(
+        `We couldn't prepare your ${label}. Please try again, or contact the school if it keeps happening.`
+      );
     } finally {
       setStarting(false);
     }
@@ -134,7 +151,7 @@ export function PandaDocSigningStep({
         void fetch(statusUrl(session.documentId))
           .then((r) => (r.ok ? r.json() : null))
           .then((d) => {
-            if (d?.status === "completed") void finish();
+            if (d?.status === "completed") void finish(session.documentId);
           })
           .catch(() => {});
       });
@@ -179,11 +196,25 @@ export function PandaDocSigningStep({
 
   if (session) {
     return (
-      <div
-        className="relative rounded-lg border overflow-hidden bg-white w-full"
-        style={{ height: "80vh", minHeight: 640 }}
-      >
+      // The 640px floor is for wider screens only. On a phone it can be
+      // taller than the screen (640px against 534px of 80vh at 375×667),
+      // which puts the widget's own controls out of view.
+      <div className="relative rounded-lg border overflow-hidden bg-white w-full h-[80vh] md:min-h-[640px]">
+        {/* The widget REPLACES the div below with an <iframe> that takes
+            over its id (and none of its classes). So the first rule
+            styles the iframe itself; without it nothing here matched
+            the iframe at all and it was left at a browser's default
+            300×150 in the corner of this box. The other two cover a
+            build of the widget that mounts inside the div instead. */}
         <style>{`
+          #${embedId} {
+            position: absolute;
+            inset: 0;
+            width: 100% !important;
+            height: 100% !important;
+            border: none !important;
+            display: block !important;
+          }
           #${embedId} > *, #${embedId} iframe {
             width: 100% !important;
             height: 100% !important;

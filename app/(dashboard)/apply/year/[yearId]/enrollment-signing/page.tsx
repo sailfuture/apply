@@ -10,6 +10,7 @@ import { useStudentRegistrationProgress } from "@/hooks/use-student-registration
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ServiceUnavailable } from "@/components/service-unavailable";
+import { SignedPdfFrame } from "@/components/signed-pdf-frame";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -44,7 +45,6 @@ export default function EnrollmentSigningPage() {
   const { data: appsData, error: appsError } = useApplications();
   const { mutate: swrMutate } = useSWRConfig();
 
-  const [pdfLoaded, setPdfLoaded] = useState(false);
   const [signingLoading, setSigningLoading] = useState(false);
   const [signingSession, setSigningSession] = useState<{ sessionId: string; documentId: string } | null>(null);
   // Preparing the document failed. The auto-open effect only fires once
@@ -56,6 +56,18 @@ export default function EnrollmentSigningPage() {
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoInitRef = useRef(false);
   const verifyOnMountRef = useRef(false);
+  // The document whose signing has been announced. Two paths see a
+  // completed signing, in either order: the widget's own "completed"
+  // event and the status poll, which keeps running after the widget has
+  // reported. Each used to show the success toast, so the parent got it
+  // twice. Whichever gets there second now finds the document here.
+  const announcedDocRef = useRef<string | null>(null);
+
+  function announceSigned(documentId: string) {
+    if (announcedDocRef.current === documentId) return;
+    announcedDocRef.current = documentId;
+    toast.success("Enrollment agreement signed successfully.");
+  }
 
   useEffect(() => {
     setPageTitle("Enrollment");
@@ -242,7 +254,7 @@ export default function EnrollmentSigningPage() {
             isEnrollment: true,
           });
           setSigningSession(null);
-          toast.success("Enrollment agreement signed successfully.");
+          announceSigned(documentId);
           pollingRef.current = null;
           return;
         }
@@ -286,7 +298,12 @@ export default function EnrollmentSigningPage() {
         signingInstanceRef.current = null;
       }
 
-      const signing = new Signing("pandadoc-enrollment-embed", { debugMode: true });
+      // `debugMode` only makes the widget log its steps to the console
+      // (event payloads included, which carry the signer's name and
+      // email). Useful while developing, noise on a parent's device.
+      const signing = new Signing("pandadoc-enrollment-embed", {
+        debugMode: process.env.NODE_ENV !== "production",
+      });
       signing
         .on("document.completed", async () => {
           await patchRegProgress({
@@ -295,7 +312,7 @@ export default function EnrollmentSigningPage() {
             isEnrollment: true,
           });
           setSigningSession(null);
-          toast.success("Enrollment agreement signed successfully.");
+          announceSigned(signingSession.documentId);
         })
         .on("document.exception", (payload: unknown) => {
           console.error("PandaDoc signing exception:", payload);
@@ -382,41 +399,49 @@ export default function EnrollmentSigningPage() {
         </p>
       </div>
 
-      {/* Completed: render the signed PDF inline. While the iframe is still
-          fetching the PDF bytes from the PandaDoc download proxy, show an
-          explicit spinner + message instead of a plain shimmer so parents
-          know something is happening rather than stuck. */}
+      {/* Completed: the signed PDF inline, with a spinner and message
+          while it loads, and the Download button underneath.
+
+          `SignedPdfFrame` doesn't point the iframe at the download proxy
+          until the proxy answers with a PDF. Right after signing it can
+          still answer with a JSON error: PandaDoc hasn't produced the
+          file yet, or `isEnrollment` was latched optimistically above
+          and the row doesn't read "completed" until that save lands. A
+          bare iframe showed that JSON to the parent as raw text.
+
+          The Download button replaces the layout's "Section Completed"
+          button. The preview already shows the doc inline, so a "View"
+          action would just re-render the same thing — Download is the
+          only meaningful follow-up.
+          The "Re-Sign Document" affordance used to live here too, but
+          it 409'd on the PandaDoc create endpoint (which rejects
+          re-creating an already-signed doc) and there's no sane re-sign
+          flow — once PandaDoc has the signed envelope, the parent can't
+          legally replace it with a fresh signing session anyway. Admin
+          can void the agreement from the PandaDoc dashboard if a
+          re-sign is actually needed. */}
       {isCompleted && pdfUrl && (
-        <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
-          {!pdfLoaded && (
-            <div className="absolute inset-0 flex items-center justify-center bg-muted/30">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="size-5 animate-spin" />
-                <span className="text-sm">Loading Signed PDF Document...</span>
-              </div>
-            </div>
-          )}
-          <iframe
-            src={pdfUrl}
-            onLoad={() => setPdfLoaded(true)}
-            className={`w-full h-full border-none transition-opacity duration-300 ${
-              pdfLoaded ? "opacity-100" : "opacity-0"
-            }`}
-            title="Signed Enrollment Agreement"
-          />
-        </div>
+        <SignedPdfFrame
+          src={pdfUrl}
+          title="Signed Enrollment Agreement"
+          downloadName="enrollment-agreement.pdf"
+          loadingLabel="Loading Signed PDF Document..."
+        />
       )}
 
       {/* Active signing session — embed the PandaDoc widget directly in
           place of the preparing skeleton. The widget mounts into this
-          container via the effect above. We force a min-height so the
-          widget renders desktop-width layout (PandaDoc breakpoints to a
-          cramped mobile view below ~900px). */}
+          container via the effect above.
+
+          The 720px floor keeps the widget generous on a short desktop
+          window, and it only applies from `xl` up. Below that the
+          layout pins a bottom bar to the screen as well as the header
+          (about 125px between them), and a 720px embed is taller than
+          what is left of a phone screen (under 690px at 375×812): the
+          widget's own controls ended up behind the bar. There the embed
+          is 80vh, which fits between the two. */}
       {!isCompleted && signingSession && (
-        <div
-          className="relative rounded-lg border overflow-hidden bg-white w-full"
-          style={{ height: "80vh", minHeight: 720 }}
-        >
+        <div className="relative rounded-lg border overflow-hidden bg-white w-full h-[80vh] xl:min-h-[720px]">
           <style>{`
             #pandadoc-enrollment-embed {
               position: absolute;
@@ -474,37 +499,6 @@ export default function EnrollmentSigningPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Post-signing action — replaces the layout's "Section Completed"
-          button with a Download link to the signed PDF. The iframe
-          preview above already shows the doc inline, so a "View"
-          action would just re-render the same thing — Download is
-          the only meaningful follow-up. Rendered as a native
-          `<a download>` so the browser fires a save-as instead of
-          opening a new tab on top of the in-page preview.
-          The "Re-Sign Document" affordance used to live here too,
-          but it 409'd on the PandaDoc create endpoint (which
-          rejects re-creating an already-signed doc) and there's no
-          sane re-sign flow — once PandaDoc has the signed envelope,
-          the parent can't legally replace it with a fresh signing
-          session anyway. Admin can void the agreement from the
-          PandaDoc dashboard if a re-sign is actually needed. */}
-      {isCompleted && pdfUrl && (
-        <div className="border-t pt-6 pb-6">
-          <Button
-            asChild
-            variant="outline"
-            className="w-full bg-white"
-          >
-            <a
-              href={pdfUrl}
-              download="enrollment-agreement.pdf"
-            >
-              Download Document
-            </a>
-          </Button>
         </div>
       )}
     </div>

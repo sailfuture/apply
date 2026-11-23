@@ -128,7 +128,15 @@ export function useApplicationSteps(yearId: number) {
     (yearsData === undefined && yearsError) ||
     (appsData === undefined && appsError) ||
     (progressData === undefined && progressError) ||
-    (regProgressData === undefined && regProgressError) ||
+    // The registration row is only drawn for an accepted family. An
+    // applicant's page doesn't wait for it, so a failed read used to
+    // replace an application already on screen with the error card,
+    // over a row that page never shows. It still counts when there is
+    // no family yet: the page then decides between /welcome and staying
+    // by whether progress rows exist, and a failed read proves nothing.
+    (regProgressData === undefined &&
+      regProgressError &&
+      (progressData?.isAccepted === true || familyData === null)) ||
     (scholarshipData === undefined && scholarshipError) ||
     undefined;
 

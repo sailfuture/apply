@@ -250,7 +250,7 @@ export default function ApplyIndexPage() {
                   <button
                     type="button"
                     onClick={() => router.push(`/apply/year/${y.id}`)}
-                    className="hover:bg-muted/50 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors"
+                    className="hover:bg-muted/50 active:bg-muted rounded-md border px-3 py-1.5 text-sm font-medium transition-[background-color,translate] active:translate-y-px"
                   >
                     {y.year_name}
                   </button>
@@ -315,7 +315,10 @@ function YearChoice({
     <button
       type="button"
       onClick={onSelect}
-      className="hover:border-foreground/40 hover:bg-muted/30 flex flex-col gap-4 rounded-lg border p-5 text-left transition-colors"
+      // Pressed state: the same 1px nudge as the app's buttons, plus a
+      // darker fill. Before, a tap on a phone (where there is no hover)
+      // showed nothing until the next page arrived.
+      className="hover:border-foreground/40 hover:bg-muted/30 active:bg-muted/60 flex flex-col gap-4 rounded-lg border p-5 text-left transition-[background-color,border-color,translate] active:translate-y-px"
     >
       <div className="space-y-1">
         <div className="flex flex-wrap items-center gap-2">

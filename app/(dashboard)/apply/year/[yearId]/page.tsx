@@ -8,12 +8,12 @@ import useSWR, { useSWRConfig } from "swr";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
-import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { LoadingScreen } from "@/components/loading-screen";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
@@ -29,6 +29,41 @@ import { toast } from "sonner";
 import confetti from "canvas-confetti";
 import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
 import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
+
+/**
+ * The step tables below are rows with a click handler, which only a
+ * mouse can use: nothing in them could be reached with Tab, and a
+ * screen reader found no link or button to open a step with. Each row
+ * therefore carries one real control (the step's title as a link, or a
+ * button on the Submit rows). The row keeps its click handler, so the
+ * whole row is still the mouse target; the control stops the click
+ * from reaching it and running twice.
+ */
+const STEP_ROW_CONTROL =
+  "rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent";
+
+function StepRowLink({
+  href,
+  detail,
+  children,
+}: {
+  href: string;
+  /** "Complete", "In progress", "Not started": what the step's circle
+   *  shows, said in words for a screen reader. */
+  detail?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`${STEP_ROW_CONTROL} focus-visible:ring-ring`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+      {detail ? <span className="sr-only">: {detail}</span> : null}
+    </Link>
+  );
+}
 
 function StepCircle({ number, status }: { number: number; status: StepStatus }) {
   if (status === "complete") {
@@ -169,7 +204,7 @@ function RegistrationPendingView({
             registration pages (bordered rounded container wrapping a Table
             with row dividers). */}
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             <div className="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
               <div>
                 <p className="text-sm font-medium">Registration received</p>
@@ -287,7 +322,7 @@ function formatDeadline(d: string | null | undefined): string | null {
   });
 }
 
-function AcceptedView({ firstName, yearId, yearName, applicationDeadline, registrationSteps }: { firstName: string; yearId: number; yearName: string; applicationDeadline: string | null; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
+function AcceptedView({ firstName, yearId, yearName, applicationDeadline, registrationSteps }: { firstName: string; yearId: number; yearName: string; applicationDeadline: string | null; registrationSteps: { number: number; title: string; description: string; status: StepStatus; detail?: string; href: string }[]; allSectionsComplete: boolean }) {
   const router = useRouter();
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -353,7 +388,7 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
 
         {/* Post-acceptance step table */}
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
                 {/* Every registration section (Tuition, Enrollment,
@@ -372,11 +407,10 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                   return (
                     <tr
                       key={step.number}
-                      className={`transition-colors cursor-pointer ${
-                        isComplete
-                          ? "hover:bg-muted/30"
-                          : "hover:bg-muted/30"
-                      }`}
+                      // `active:` is the pressed state: on a phone
+                      // there is no hover, so a tap used to show
+                      // nothing until the step had loaded.
+                      className="transition-colors cursor-pointer hover:bg-muted/30 active:bg-muted/60"
                       onClick={() => router.push(step.href)}
                     >
                       <td className="px-4 py-4 w-12">
@@ -392,7 +426,11 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                         />
                       </td>
                       <td className="px-2 py-4">
-                        <p className="font-medium">{step.title}</p>
+                        <p className="font-medium">
+                          <StepRowLink href={step.href} detail={step.detail}>
+                            {step.title}
+                          </StepRowLink>
+                        </p>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {step.description}
                         </p>
@@ -411,7 +449,7 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                     gates the confirm button, matching the application-phase
                     submit UX. */}
                 <tr
-                  className="transition-colors bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                  className="transition-colors bg-blue-600 hover:bg-blue-700 active:bg-blue-800 cursor-pointer"
                   onClick={() => setSubmitOpen(true)}
                 >
                   <td className="px-4 py-4 w-12">
@@ -421,16 +459,27 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
                   </td>
                   <td className="px-2 py-4">
                     <p className="font-medium text-white">
-                      Submit Registration
-                      {/* No count without the row it is counted from:
-                          until the row is here every section reads as
-                          incomplete, so this would say "(0/5)" and then
-                          jump to the real number. */}
-                      {regProgress ? (
-                        <span className="ml-1.5 text-white/70 text-xs font-normal">
-                          ({submitSections.filter((s) => s.complete).length}/{submitSections.length})
-                        </span>
-                      ) : null}
+                      {/* A real button, so the keyboard can reach it:
+                          the row's own click handler is mouse-only. */}
+                      <button
+                        type="button"
+                        className={`${STEP_ROW_CONTROL} focus-visible:ring-white`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSubmitOpen(true);
+                        }}
+                      >
+                        Submit Registration
+                        {/* No count without the row it is counted from:
+                            until the row is here every section reads as
+                            incomplete, so this would say "(0/5)" and then
+                            jump to the real number. */}
+                        {regProgress ? (
+                          <span className="ml-1.5 text-white/70 text-xs font-normal">
+                            ({submitSections.filter((s) => s.complete).length}/{submitSections.length})
+                          </span>
+                        ) : null}
+                      </button>
                     </p>
                   </td>
                   <td className="px-4 py-4 w-10">
@@ -796,7 +845,7 @@ export default function YearOverviewPage() {
 
   // Keep the spinner up while we know a redirect is imminent so the
   // parent doesn't see the apply / accepted view flash briefly
-  // before the URL changes. Two transitional cases:
+  // before the URL changes. Three transitional cases:
   //
   //   1. Family is accepted but we're on `/apply` — the URL effect
   //      above will redirect to `/registration` (or `/dashboard` if
@@ -804,11 +853,14 @@ export default function YearOverviewPage() {
   //      that window rather than the apply form.
   //   2. Family is NOT accepted but we're on `/registration` —
   //      symmetric case, will redirect back to `/apply`.
-  //
-  // The "stage=accepted + already enrolled" case is handled by
-  // `isEnrolled` short-circuiting the whole page directly to the
-  // dashboard further down; this guard only covers the URL-mismatch
-  // case where we haven't decided yet but know we're going to move.
+  //   3. Family is enrolled — the URL effect sends them to
+  //      `/dashboard` from either path. This page used to draw the
+  //      enrolled dashboard itself for that moment, and `/dashboard`
+  //      then opened behind its own loader (it has to work out which
+  //      year to show), so an enrolled family arriving on a year link
+  //      saw the dashboard, a spinner, and the dashboard again. The
+  //      loader now stays up through the hop: both loaders fill the
+  //      same box, so it reads as one wait and one dashboard.
   const onApplyPath = pathname.startsWith(`/apply/year/${yearId}`);
   const onRegistrationPath = pathname.startsWith(
     `/registration/year/${yearId}`
@@ -874,7 +926,7 @@ export default function YearOverviewPage() {
 
   const willRedirect =
     !initialDataLoading &&
-    ((stage === "accepted" && onApplyPath) ||
+    ((stage === "accepted" && (onApplyPath || isEnrolled)) ||
       (stage !== "accepted" && onRegistrationPath));
 
   // A fetch this page can't render without has exhausted SWR's retry
@@ -889,7 +941,11 @@ export default function YearOverviewPage() {
     stepsError ||
     (students === undefined && studentsError) ||
     (progress === null && familyProgressError) ||
-    (regProgress === null && regProgressError) ||
+    // Only where the registration row is needed (same rule as
+    // `useApplicationSteps`): an accepted family, or no family yet.
+    ((awaitsRegistration || family === null) &&
+      regProgress === null &&
+      regProgressError) ||
     (yearPacketsPending && yearPacketsError);
   if (blockingError) {
     return (
@@ -1046,16 +1102,9 @@ export default function YearOverviewPage() {
      selectors (enrolled / submitted / accepted) can read live data. */
 
   /* Stage 5: Enrolled — registration submitted AND every student's packet
-     has been admin-confirmed. The enrolled-family dashboard takes over. */
-  if (stage === "accepted" && isEnrolled) {
-    return (
-      <EnrolledFamilyDashboard
-        yearId={yearId}
-        yearName={schoolYear?.year_name ?? "current"}
-        submittedDate={regProgress?.submitted_date ?? null}
-      />
-    );
-  }
+     has been admin-confirmed. Not drawn here: an enrolled family never
+     gets this far, `willRedirect` above holds the loader until the URL
+     effect has moved them to `/dashboard`. */
 
   /* Stage 4: Registration submitted — pending admin review. Parent has
      submitted, but at least one student's packet hasn't been confirmed
@@ -1184,7 +1233,7 @@ export default function YearOverviewPage() {
 
         {/* Step Table */}
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-          <div className="overflow-hidden rounded-lg border">
+          <div className="overflow-hidden rounded-frame-inner border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
                 {steps.filter((s) => s.title !== "Submit Application").map((step) => {
@@ -1193,7 +1242,7 @@ export default function YearOverviewPage() {
                   return (
                     <tr
                       key={step.number}
-                      className="transition-colors cursor-pointer hover:bg-muted/30"
+                      className="transition-colors cursor-pointer hover:bg-muted/30 active:bg-muted/60"
                       onClick={() => router.push(step.href)}
                     >
                       <td className="px-4 py-4 w-12">
@@ -1203,7 +1252,11 @@ export default function YearOverviewPage() {
                         />
                       </td>
                       <td className="px-2 py-4">
-                        <p className="font-medium">{step.title}</p>
+                        <p className="font-medium">
+                          <StepRowLink href={step.href} detail={step.detail}>
+                            {step.title}
+                          </StepRowLink>
+                        </p>
                       </td>
                       <td className="px-4 py-4 w-10 text-muted-foreground">
                         <div className="flex size-7 items-center justify-center rounded-md border border-border">
@@ -1217,7 +1270,7 @@ export default function YearOverviewPage() {
                 {/* Submit Application row — always clickable; the modal tells
                     the user what's left if anything. */}
                 <tr
-                  className="bg-primary text-primary-foreground cursor-pointer transition-opacity hover:opacity-90"
+                  className="bg-primary text-primary-foreground cursor-pointer transition-opacity hover:opacity-90 active:opacity-80"
                   onClick={() => setPreSubmitOpen(true)}
                 >
                   <td className="px-4 py-4 w-12">
@@ -1226,7 +1279,18 @@ export default function YearOverviewPage() {
                     </div>
                   </td>
                   <td className="px-2 py-4">
-                    <p className="font-semibold">Submit Application</p>
+                    <p className="font-semibold">
+                      <button
+                        type="button"
+                        className={`${STEP_ROW_CONTROL} font-semibold focus-visible:ring-primary-foreground`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPreSubmitOpen(true);
+                        }}
+                      >
+                        Submit Application
+                      </button>
+                    </p>
                   </td>
                   <td className="px-4 py-4 w-10">
                     <div className="flex size-7 items-center justify-center rounded-md border border-primary-foreground/30">
