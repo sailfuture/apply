@@ -2078,7 +2078,7 @@ export function FinancialAidStep({
             compat; the field stores the uploaded document(s) regardless
             of which document type the family chose to upload. */}
         <AlertDialog open={snapModalOpen} onOpenChange={setSnapModalOpen}>
-          <AlertDialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+          <AlertDialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             <AlertDialogHeader>
               <AlertDialogTitle>
                 SNAP or Free/Reduced Meal Status Pre-Qualification

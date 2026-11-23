@@ -1,4 +1,6 @@
-import useSWR, { mutate as globalMutate } from "swr";
+import { useCallback } from "react";
+import useSWR, { mutate as globalMutate, useSWRConfig } from "swr";
+import { useIsClient } from "@/hooks/use-is-client";
 
 // All routes that call these hooks are gated by `clerkMiddleware` in
 // `proxy.ts` — the request can't reach the page without a valid session.
@@ -163,6 +165,72 @@ export function useBusStops() {
     revalidateOnFocus: false,
     dedupingInterval: 60000,
   });
+}
+
+/** Reads what SWR already holds for a key; `undefined` when it holds
+ *  nothing (or during the first, hydrating render — see below). */
+export type ApiCacheReader = <T>(key: string) => T | undefined;
+
+/**
+ * For the apply-flow step pages, which keep an editable copy of their
+ * data in local state and load it themselves (`apiFetch`) rather than
+ * through the hooks above. Each of them started every visit empty,
+ * behind a skeleton, until its own fetch came back — although the
+ * header and the side nav had the same responses in the SWR cache all
+ * along. The Family and Students steps now fill their first render
+ * from this reader and run their usual load behind it; Financial Aid
+ * and Initial Testing still load the old way.
+ *
+ * Reads without subscribing and never fetches. Returns `undefined`
+ * for everything while the page is hydrating, so the first client
+ * render matches the server's (which has no cache) — a step opened by
+ * URL shows its skeleton exactly as before; only a move between steps
+ * starts from the cache.
+ */
+export function useApiCacheReader(): ApiCacheReader {
+  const { cache } = useSWRConfig();
+  const isClient = useIsClient();
+  return useCallback(
+    <T,>(key: string) =>
+      isClient ? (cache.get(key)?.data as T | undefined) : undefined,
+    [cache, isClient]
+  );
+}
+
+// Saves the step pages have sent that have not come back yet. Kept
+// here, outside any one page, because a save is often still on the
+// wire when the parent moves on: leaving a field saves it, and so does
+// leaving a step. Whatever loads next (the same step again, or another
+// step that shows the same rows) waits for these first, so its read
+// cannot come back without them.
+const pendingStepSaves = new Set<Promise<unknown>>();
+
+/** Register a save while it is in flight. Returns `save` unchanged. */
+export function trackStepSave<T>(save: Promise<T>): Promise<T> {
+  pendingStepSaves.add(save);
+  const done = () => {
+    pendingStepSaves.delete(save);
+  };
+  save.then(done, done);
+  return save;
+}
+
+/** How long a load or "Complete" will hold for saves still in flight.
+ *  A save normally answers in a second or two; one that is stuck must
+ *  not keep the next step behind its skeleton. */
+const STEP_SAVE_WAIT_MS = 5000;
+
+/** Resolves once every save registered so far has come back, whether
+ *  it went through or not — or after `STEP_SAVE_WAIT_MS`, whichever is
+ *  first. Past that the caller carries on as it did before this
+ *  existed: the read may miss the save, "Complete" may send a field
+ *  again. */
+export function stepSavesSettled(): Promise<unknown> {
+  if (pendingStepSaves.size === 0) return Promise.resolve();
+  return Promise.race([
+    Promise.allSettled([...pendingStepSaves]),
+    new Promise((resolve) => setTimeout(resolve, STEP_SAVE_WAIT_MS)),
+  ]);
 }
 
 export function mutateFamily() {

@@ -734,6 +734,10 @@ export default function YearOverviewPage() {
   // registration progress yet. Gated on the registration progress row
   // being loaded (regProgress !== null) so we don't fire during the
   // initial load when `isRegistrationSubmitted` defaults to false.
+  //
+  // Once per browser, not once per visit: the ref alone reset every
+  // time this page mounted, so the confetti replayed on every return to
+  // the overview until the first registration step was finished.
   const confettiFired = useRef(false);
   useEffect(() => {
     if (
@@ -744,6 +748,15 @@ export default function YearOverviewPage() {
       !isRegistrationSubmitted
     ) {
       confettiFired.current = true;
+      // Storage can be missing or blocked (private window, cleared site
+      // data). Then the celebration just plays again next visit.
+      const seenKey = `sfa:accepted-confetti:${yearId}`;
+      try {
+        if (window.localStorage.getItem(seenKey)) return;
+        window.localStorage.setItem(seenKey, "1");
+      } catch {
+        // fall through and celebrate
+      }
 
       // Navy blue + silver — SailFuture school colors.
       const SCHOOL_COLORS = ["#0D2446", "#1a3a6b", "#1e40af", "#c0c0c0", "#e5e7eb", "#9ca3af"];
@@ -753,7 +766,7 @@ export default function YearOverviewPage() {
         confetti({ particleCount: 50, spread: 100, origin: { x: 0.5, y: 0.4 }, colors: SCHOOL_COLORS });
       }, 300);
     }
-  }, [stage, regProgress, registrationCompletedCount, isRegistrationSubmitted]);
+  }, [stage, regProgress, registrationCompletedCount, isRegistrationSubmitted, yearId]);
 
   // Keep the spinner up while we know a redirect is imminent so the
   // parent doesn't see the apply / accepted view flash briefly

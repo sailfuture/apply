@@ -46,7 +46,13 @@ import { useSWRConfig } from "swr";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { SmsConsentFields } from "@/components/sms-consent-fields";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { apiFetch } from "@/hooks/use-api";
+import {
+  apiFetch,
+  stepSavesSettled,
+  trackStepSave,
+  useApiCacheReader,
+} from "@/hooks/use-api";
+import { useLazyRef } from "@/hooks/use-lazy-ref";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { hasAffirmativeSmsConsent } from "@/lib/sms/consent";
 import { US_STATES } from "@/lib/us-states";
@@ -82,6 +88,60 @@ function getInitials(first: string, last: string): string {
   return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
 }
 
+// The parent columns this step saves. Leaving a field saves that
+// field; "Complete" then sends only what is still unsaved from this
+// list (see `handleSaveAll`).
+const PARENT_SAVE_FIELDS = [
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "relationship",
+  "address_line_1",
+  "address_line_2",
+  "city",
+  "state",
+  "zipcode",
+] as const;
+type ParentSaveField = (typeof PARENT_SAVE_FIELDS)[number];
+
+// What "Complete" needs on every parent besides an email (see
+// `isParentComplete`), and so what gets a red outline once missed.
+const REQUIRED_PARENT_FIELDS = [
+  "first_name",
+  "last_name",
+  "phone",
+  "relationship",
+  "address_line_1",
+  "city",
+  "state",
+  "zipcode",
+] as const;
+type RequiredParentField = (typeof REQUIRED_PARENT_FIELDS)[number];
+
+/** Key of one parent's field in the page's set of flagged fields. */
+const parentFieldKey = (parentId: number, field: ParentSaveField) =>
+  `${parentId}:${field}`;
+const FAMILY_NAME_KEY = "family_name";
+
+/** `/api/families` as the SWR hooks cache it. */
+interface CachedFamily {
+  family_name?: string | null;
+  parents?: Parent[] | null;
+}
+
+/** What ticking or clearing the consent box makes of the parent's row
+ *  on screen, ahead of the save (the API does the real mapping from the
+ *  virtual `sms_consent` field — see lib/sms/consent.ts). */
+function smsConsentChange(consented: boolean): Partial<Parent> {
+  return {
+    sms_consent_source: consented
+      ? "registration_checkbox"
+      : "declined_registration_checkbox",
+    sms_opted_out_at: consented ? 0 : Date.now(),
+  };
+}
+
 export default function FamilyStepPage() {
   const params = useParams();
   const yearId = params.yearId as string;
@@ -97,16 +157,60 @@ export default function FamilyStepPage() {
   } = useApplicationFlow();
   const { mutate } = useSWRConfig();
 
-  const [parents, setParents] = useState<Parent[]>([]);
-  const [familyName, setFamilyName] = useState("");
+  // The family as SWR already holds it — the header and the side nav
+  // keep `/api/families` loaded, and this page's own saves are written
+  // into that entry (see `patchParent`). Moving here from another step
+  // starts from it instead of a skeleton; `fetchData` still runs behind
+  // it and replaces it with what the server says. Null when there is
+  // nothing cached yet (the step was opened by URL).
+  const readCached = useApiCacheReader();
+  const [seed] = useState(() => {
+    const cached = readCached<CachedFamily | null>("/api/families");
+    return cached && Array.isArray(cached.parents)
+      ? { parents: cached.parents, familyName: cached.family_name ?? "" }
+      : null;
+  });
+
+  const [parents, setParents] = useState<Parent[]>(() => seed?.parents ?? []);
+  const [familyName, setFamilyName] = useState(() => seed?.familyName ?? "");
   const [yearName, setYearName] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(seed === null);
   // Set only when the FIRST load fails. A refetch that fails after the
   // family is on screen (after an invite, say) keeps the data — same
   // rule as the SWR-driven pages: only an error with nothing behind it
   // blocks the page.
   const [loadFailed, setLoadFailed] = useState(false);
-  const loadedOnceRef = useRef(false);
+  const loadedOnceRef = useRef(seed !== null);
+
+  // What the server has for each parent as far as this page knows: the
+  // row as loaded, then patched by every save that went through.
+  // "Complete" compares against it and sends only what is not saved.
+  const savedParentsRef = useLazyRef(
+    () => new Map<number, Parent>((seed?.parents ?? []).map((p) => [p.id, p]))
+  );
+  // Counts local changes (typing, the consent box, removing a guardian).
+  // A background refresh that started before the latest one is not
+  // applied — it would put the old values back over what was just typed.
+  const localChangesRef = useRef(0);
+  // Only the newest load may apply its result.
+  const loadSeqRef = useRef(0);
+
+  // Required fields the parent has been in and left, or that a failed
+  // "Complete" pointed at. A field is outlined in red only when it is in
+  // here AND still empty: a brand-new parent used to open this step to a
+  // red "Relationship" box before typing anything.
+  const [flagged, setFlagged] = useState<ReadonlySet<string>>(() => new Set());
+  function flagFields(keys: string[]) {
+    setFlagged((prev) => {
+      if (keys.every((k) => prev.has(k))) return prev;
+      const next = new Set(prev);
+      for (const k of keys) next.add(k);
+      return next;
+    });
+  }
+  function isMissing(parent: Parent, field: RequiredParentField): boolean {
+    return flagged.has(parentFieldKey(parent.id, field)) && !parent[field];
+  }
 
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -130,8 +234,18 @@ export default function FamilyStepPage() {
     );
   }
 
-  const fetchData = useCallback(async () => {
+  // `background` is the load that runs behind a page already on screen
+  // (the one on arrival). It must not undo what the parent has typed
+  // since it started; the loads the parent asks for (after an invite,
+  // "Try again") always apply, as they always have.
+  const fetchData = useCallback(async (opts?: { background?: boolean }) => {
+    const seq = ++loadSeqRef.current;
+    const changesAtStart = localChangesRef.current;
     try {
+      // A save from a moment ago (a field left on the way out of this
+      // step, last visit) has to land first, or this read can come back
+      // without it and show the old value.
+      await stepSavesSettled();
       // `apiFetch` retries a 401 once after refreshing the Clerk token
       // (a cold load can race that refresh). Any other non-2xx used to
       // be skipped silently, which rendered an empty family — it now
@@ -142,30 +256,103 @@ export default function FamilyStepPage() {
       ]);
       if (!familyRes.ok) throw new Error(`API error ${familyRes.status}`);
       if (!yearsRes.ok) throw new Error(`API error ${yearsRes.status}`);
-      const fam = await familyRes.json();
-      setParents(fam?.parents ?? []);
-      if (fam?.family_name) setFamilyName(fam.family_name);
+      const fam: CachedFamily | null = await familyRes.json();
       const years: SchoolYear[] = await yearsRes.json();
+      // A newer load started while this one was out; it decides.
+      if (seq !== loadSeqRef.current) return;
       const found = years.find((y) => y.id === Number(yearId));
       if (found) setYearName(found.year_name);
+      const keepLocal =
+        opts?.background === true &&
+        loadedOnceRef.current &&
+        localChangesRef.current !== changesAtStart;
+      if (!keepLocal) {
+        const loaded = fam?.parents ?? [];
+        setParents(loaded);
+        if (fam?.family_name) setFamilyName(fam.family_name);
+        savedParentsRef.current = new Map(loaded.map((p) => [p.id, p]));
+        // Hand the fresh copy to SWR too: it is what this step, the
+        // Students step and the header start from next time.
+        if (fam) void mutate("/api/families", fam, { revalidate: false });
+      }
       loadedOnceRef.current = true;
       setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch:", err);
-      if (!loadedOnceRef.current) setLoadFailed(true);
+      if (seq === loadSeqRef.current && !loadedOnceRef.current) {
+        setLoadFailed(true);
+      }
     } finally {
-      setLoading(false);
+      // An overtaken load leaves the skeleton to the one that replaced it.
+      if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [yearId]);
+  }, [yearId, mutate, savedParentsRef]);
 
   useEffect(() => {
-    fetchData();
+    fetchData({ background: true });
   }, [fetchData]);
 
   function updateParentLocal(parentId: number, field: string, value: string) {
+    localChangesRef.current += 1;
     setParents((prev) =>
       prev.map((p) => (p.id === parentId ? { ...p, [field]: value } : p))
     );
+  }
+
+  /** Apply a change to the cached `/api/families` parents, so the
+   *  header, the Students step and the next visit here all see it. */
+  function updateCachedParents(update: (parents: Parent[]) => Parent[]) {
+    void mutate(
+      "/api/families",
+      (curr: CachedFamily | null | undefined) =>
+        curr && Array.isArray(curr.parents)
+          ? { ...curr, parents: update(curr.parents) }
+          : curr,
+      { revalidate: false }
+    );
+  }
+
+  /**
+   * Every parent PATCH from this page goes through here, so one place
+   * keeps three things true:
+   *   - `savedParentsRef` knows what the server has, which is how
+   *     "Complete" avoids sending a field a blur already saved;
+   *   - `trackStepSave` lets "Complete" and the next load (here or on
+   *     another step) wait for a save that is still on the wire;
+   *   - the cached `/api/families` carries the change straight away, so
+   *     leaving the step and coming back shows it. A save that fails
+   *     refetches that entry, putting back what the server has.
+   * `body` is what is sent; `local` is what it makes of the row (they
+   * differ only for the consent box, whose field is virtual).
+   */
+  function patchParent(
+    parentId: number,
+    body: object,
+    local: Partial<Parent>,
+    failure = "Save failed"
+  ): Promise<void> {
+    const applyToCache = () =>
+      updateCachedParents((list) =>
+        list.map((p) => (p.id === parentId ? { ...p, ...local } : p))
+      );
+    applyToCache();
+    const request = fetch(`/api/parents/${parentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`${failure} (${res.status}) ${text}`);
+      }
+      const saved = savedParentsRef.current.get(parentId);
+      if (saved) savedParentsRef.current.set(parentId, { ...saved, ...local });
+      // Once more now that it is saved: a refetch of the family that
+      // overlapped the save may have put the old row back.
+      applyToCache();
+    });
+    request.catch(() => void mutate("/api/families"));
+    return trackStepSave(request);
   }
 
   const [saving, setSaving] = useState(false);
@@ -220,6 +407,14 @@ export default function FamilyStepPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? "");
       }
+      // The cached family this step opens from next time has the old
+      // address until it is refetched; give it the new one now.
+      const changed = pendingEmail;
+      updateCachedParents((list) =>
+        list.map((p) =>
+          p.id === changed.parentId ? { ...p, email: changed.email } : p
+        )
+      );
       // Pick up the new sign-in email so this card still reads as "mine"
       // and the header shows the right address.
       await clerkUser?.reload();
@@ -242,26 +437,30 @@ export default function FamilyStepPage() {
     setPendingEmail(null);
   }
 
-  async function saveParentField(parentId: number, field: string, value: string) {
+  async function saveParentField(
+    parentId: number,
+    field: ParentSaveField,
+    value: string
+  ) {
     // Per-field onBlur auto-save — drives the global SaveStatusPill badge
     // shown in the apply-flow layout so users see "Saving… → Saved Xs ago".
+    const change: Partial<Parent> = {};
+    change[field] = value;
     try {
-      await trackAutosave(
-        fetch(`/api/parents/${parentId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [field]: value }),
-        }).then(async (res) => {
-          if (!res.ok) {
-            const body = await res.text().catch(() => "");
-            throw new Error(`Save failed (${res.status}) ${body}`);
-          }
-          return res;
-        })
-      );
+      await trackAutosave(patchParent(parentId, change, change));
     } catch (err) {
       console.error("Failed to save parent field:", err);
     }
+  }
+
+  /** Leaving a field: from here on it may show as missing, and it saves. */
+  function handleFieldBlur(
+    parentId: number,
+    field: ParentSaveField,
+    value: string
+  ) {
+    flagFields([parentFieldKey(parentId, field)]);
+    void saveParentField(parentId, field, value);
   }
 
   /**
@@ -273,32 +472,14 @@ export default function FamilyStepPage() {
    * doesn't lag the click.
    */
   async function saveSmsConsent(parentId: number, consented: boolean) {
+    const change = smsConsentChange(consented);
+    localChangesRef.current += 1;
     setParents((prev) =>
-      prev.map((p) =>
-        p.id === parentId
-          ? {
-              ...p,
-              sms_consent_source: consented
-                ? "registration_checkbox"
-                : "declined_registration_checkbox",
-              sms_opted_out_at: consented ? 0 : Date.now(),
-            }
-          : p
-      )
+      prev.map((p) => (p.id === parentId ? { ...p, ...change } : p))
     );
     try {
       await trackAutosave(
-        fetch(`/api/parents/${parentId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sms_consent: consented }),
-        }).then(async (res) => {
-          if (!res.ok) {
-            const body = await res.text().catch(() => "");
-            throw new Error(`Save failed (${res.status}) ${body}`);
-          }
-          return res;
-        })
+        patchParent(parentId, { sms_consent: consented }, change)
       );
     } catch (err) {
       console.error("Failed to save SMS consent:", err);
@@ -337,33 +518,45 @@ export default function FamilyStepPage() {
     }
   }
 
+  /** The fields of `p` the server does not have yet: typed (or filled
+   *  in by the browser) but never saved by a blur, or whose save failed. */
+  function unsavedParentFields(p: Parent): Partial<Parent> {
+    const saved = savedParentsRef.current.get(p.id);
+    const unsaved: Partial<Parent> = {};
+    for (const field of PARENT_SAVE_FIELDS) {
+      // A sign-in email changes only through its own confirmation
+      // dialog (this parent's card), and never from someone else's card.
+      if (field === "email" && (p.clerk_user_id || isMyCard(p))) continue;
+      const value = p[field] ?? "";
+      if (!saved || value !== (saved[field] ?? "")) unsaved[field] = value;
+    }
+    return unsaved;
+  }
+
   async function handleSaveAll() {
     setSaving(true);
     try {
       await trackAutosave(
-        Promise.all(
-          parents.map(async (p) => {
-            const res = await fetch(`/api/parents/${p.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                email: p.email,
-                phone: p.phone,
-                relationship: p.relationship,
-                address_line_1: p.address_line_1,
-                address_line_2: p.address_line_2,
-                city: p.city,
-                state: p.state,
-                zipcode: p.zipcode,
-              }),
-            });
-            if (!res.ok) {
-              const body = await res.text().catch(() => "");
-              throw new Error(`Failed to save ${p.first_name} (${res.status}) ${body}`);
-            }
-            return res;
-          })
-        )
+        (async () => {
+          // The field the parent was in when they pressed Complete has
+          // just started its own save on blur. Wait for it, then send
+          // only what is still unsaved. This used to PATCH every parent
+          // with every field regardless, so each Complete sent that
+          // parent's save twice.
+          await stepSavesSettled();
+          await Promise.all(
+            parents.map((p) => {
+              const unsaved = unsavedParentFields(p);
+              if (Object.keys(unsaved).length === 0) return undefined;
+              return patchParent(
+                p.id,
+                unsaved,
+                unsaved,
+                `Failed to save ${p.first_name}`
+              );
+            })
+          );
+        })()
       );
       mutate("/api/families");
     } catch (err) {
@@ -401,6 +594,12 @@ export default function FamilyStepPage() {
   handleCompleteRef.current = async () => {
     const allComplete = parents.length > 0 && parents.every((p) => isParentComplete(p));
     if (!allComplete) {
+      // Show which ones: every required field still empty turns red.
+      flagFields(
+        parents.flatMap((p) =>
+          REQUIRED_PARENT_FIELDS.map((f) => parentFieldKey(p.id, f))
+        )
+      );
       toast.error("Please fill out all required fields for each parent/guardian.");
       throw new Error("Validation failed");
     }
@@ -464,7 +663,9 @@ export default function FamilyStepPage() {
 
   function handleDeleteParent(parentId: number) {
     // Optimistic: remove from UI immediately, fire API in background
+    localChangesRef.current += 1;
     setParents((prev) => prev.filter((p) => p.id !== parentId));
+    updateCachedParents((list) => list.filter((p) => p.id !== parentId));
     setPendingDeleteParent(null);
     fetch(`/api/parents/${parentId}`, { method: "DELETE" }).catch((err) =>
       console.error("Failed to delete parent:", err)
@@ -581,14 +782,24 @@ export default function FamilyStepPage() {
                 id="family-name"
                 placeholder="e.g. The Walsh Family"
                 value={familyName}
-                onChange={(e) => setFamilyName(e.target.value)}
-                onBlur={(e) => saveFamilyName(e.target.value)}
+                onChange={(e) => {
+                  localChangesRef.current += 1;
+                  setFamilyName(e.target.value);
+                }}
+                onBlur={(e) => {
+                  flagFields([FAMILY_NAME_KEY]);
+                  saveFamilyName(e.target.value);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     (e.target as HTMLInputElement).blur();
                   }
                 }}
-                className={!familyName.trim() ? "border-2 border-red-400" : ""}
+                className={
+                  flagged.has(FAMILY_NAME_KEY) && !familyName.trim()
+                    ? "border-2 border-red-400"
+                    : ""
+                }
               />
               <p className="text-xs text-muted-foreground mt-1.5">
                 Shown on the dashboard, in the global header, and on
@@ -669,9 +880,9 @@ export default function FamilyStepPage() {
                     </h3>
                     <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                       <Field>
-                        <FieldLabel className="text-xs">First Name</FieldLabel>
+                        <FieldLabel className="text-xs">First Name <span className="text-red-400">*</span></FieldLabel>
                         <Input
-                          className={!parent.first_name ? "border-2 border-red-400" : ""}
+                          className={isMissing(parent, "first_name") ? "border-2 border-red-400" : ""}
                           placeholder="Jane"
                           value={parent.first_name || ""}
                           autoComplete="given-name"
@@ -679,14 +890,14 @@ export default function FamilyStepPage() {
                             updateParentLocal(parent.id, "first_name", e.target.value)
                           }
                           onBlur={(e) =>
-                            saveParentField(parent.id, "first_name", e.target.value)
+                            handleFieldBlur(parent.id, "first_name", e.target.value)
                           }
                         />
                       </Field>
                       <Field>
-                        <FieldLabel className="text-xs">Last Name</FieldLabel>
+                        <FieldLabel className="text-xs">Last Name <span className="text-red-400">*</span></FieldLabel>
                         <Input
-                          className={!parent.last_name ? "border-2 border-red-400" : ""}
+                          className={isMissing(parent, "last_name") ? "border-2 border-red-400" : ""}
                           placeholder="Walsh"
                           value={parent.last_name || ""}
                           autoComplete="family-name"
@@ -694,7 +905,7 @@ export default function FamilyStepPage() {
                             updateParentLocal(parent.id, "last_name", e.target.value)
                           }
                           onBlur={(e) =>
-                            saveParentField(parent.id, "last_name", e.target.value)
+                            handleFieldBlur(parent.id, "last_name", e.target.value)
                           }
                         />
                       </Field>
@@ -735,15 +946,17 @@ export default function FamilyStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Phone                        </FieldLabel>
+                          Phone <span className="text-red-400">*</span></FieldLabel>
                         <PhoneInput
-                          className={!parent.phone ? "border-2 border-red-400" : ""}
+                          className={isMissing(parent, "phone") ? "border-2 border-red-400" : ""}
                           value={parent.phone || ""}
                           autoComplete="tel"
                           onChange={(d) =>
                             updateParentLocal(parent.id, "phone", d)
                           }
                           onValidate={(result) => {
+                            // Fires when the field is left, empty or not.
+                            flagFields([parentFieldKey(parent.id, "phone")]);
                             // Only persist valid (or empty) values so we
                             // don't write a partially-typed number back
                             // to Xano on blur. Invalid input stays in
@@ -757,16 +970,16 @@ export default function FamilyStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Relationship                        </FieldLabel>
+                          Relationship <span className="text-red-400">*</span></FieldLabel>
                         <Input
-                          className={!parent.relationship ? "border-2 border-red-400" : ""}
+                          className={isMissing(parent, "relationship") ? "border-2 border-red-400" : ""}
                           placeholder="e.g. Mother"
                           value={parent.relationship || ""}
                           onChange={(e) =>
                             updateParentLocal(parent.id, "relationship", e.target.value)
                           }
                           onBlur={(e) =>
-                            saveParentField(parent.id, "relationship", e.target.value)
+                            handleFieldBlur(parent.id, "relationship", e.target.value)
                           }
                         />
                       </Field>
@@ -805,8 +1018,7 @@ export default function FamilyStepPage() {
                       <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr]">
                         <Field>
                           <FieldLabel className="text-xs">
-                            Street Address{" "}
-                                                     </FieldLabel>
+                            Street Address <span className="text-red-400">*</span></FieldLabel>
                           {/* Standard `autoComplete` tokens unlock the
                               browser's saved-address dropdown (and
                               password-manager address autofill). Each
@@ -817,7 +1029,7 @@ export default function FamilyStepPage() {
                               browsers fall back to ad-hoc heuristics
                               and most users see no suggestions. */}
                           <Input
-                            className={!parent.address_line_1 ? "border-2 border-red-400" : ""}
+                            className={isMissing(parent, "address_line_1") ? "border-2 border-red-400" : ""}
                             placeholder="123 Main Street"
                             value={parent.address_line_1 || ""}
                             autoComplete="address-line1"
@@ -825,7 +1037,7 @@ export default function FamilyStepPage() {
                               updateParentLocal(parent.id, "address_line_1", e.target.value)
                             }
                             onBlur={(e) =>
-                              saveParentField(parent.id, "address_line_1", e.target.value)
+                              handleFieldBlur(parent.id, "address_line_1", e.target.value)
                             }
                           />
                         </Field>
@@ -849,9 +1061,9 @@ export default function FamilyStepPage() {
                       <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
                         <Field>
                           <FieldLabel className="text-xs">
-                            City                          </FieldLabel>
+                            City <span className="text-red-400">*</span></FieldLabel>
                           <Input
-                            className={!parent.city ? "border-2 border-red-400" : ""}
+                            className={isMissing(parent, "city") ? "border-2 border-red-400" : ""}
                             placeholder="St. Petersburg"
                             value={parent.city || ""}
                             autoComplete="address-level2"
@@ -859,16 +1071,18 @@ export default function FamilyStepPage() {
                               updateParentLocal(parent.id, "city", e.target.value)
                             }
                             onBlur={(e) =>
-                              saveParentField(parent.id, "city", e.target.value)
+                              handleFieldBlur(parent.id, "city", e.target.value)
                             }
                           />
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
-                            State                          </FieldLabel>
+                            State <span className="text-red-400">*</span></FieldLabel>
                           <StateSelect
                             value={parent.state || ""}
-                            invalid={!parent.state}
+                            // No "left the field" moment on this picker:
+                            // it turns red after a failed Complete.
+                            invalid={isMissing(parent, "state")}
                             onChange={(v) => {
                               updateParentLocal(parent.id, "state", v);
                               saveParentField(parent.id, "state", v);
@@ -877,10 +1091,9 @@ export default function FamilyStepPage() {
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
-                            Zip Code{" "}
-                                                     </FieldLabel>
+                            Zip Code <span className="text-red-400">*</span></FieldLabel>
                           <Input
-                            className={!parent.zipcode ? "border-2 border-red-400" : ""}
+                            className={isMissing(parent, "zipcode") ? "border-2 border-red-400" : ""}
                             placeholder="33701"
                             value={parent.zipcode || ""}
                             autoComplete="postal-code"
@@ -888,7 +1101,7 @@ export default function FamilyStepPage() {
                               updateParentLocal(parent.id, "zipcode", e.target.value)
                             }
                             onBlur={(e) =>
-                              saveParentField(parent.id, "zipcode", e.target.value)
+                              handleFieldBlur(parent.id, "zipcode", e.target.value)
                             }
                           />
                         </Field>

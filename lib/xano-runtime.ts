@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { revalidateTag } from "next/cache";
+import { after } from "next/server";
 import { cacheTagFor, type XanoCall, type XanoServerHooks } from "@/lib/xano-fetch";
 
 /**
@@ -41,14 +42,42 @@ export function noteAuthMode(mode: AuthMode): void {
  *  for `revalidateTag`; the string profiles ("max") are
  *  stale-while-revalidate, which would hand an admin their own
  *  pre-edit list once more before refreshing, and `updateTag` is
- *  refused outside Server Actions. Throws outside a Next request
- *  scope (tsx scripts, tests) — nothing is cached there, so the
- *  throw is swallowed. */
+ *  refused outside Server Actions.
+ *
+ *  Next also refuses `revalidateTag` while a Server Component is
+ *  RENDERING, and that refusal used to be swallowed here. The `/`
+ *  resolver creates a new parent's row during its render, so the
+ *  "no parent yet" lookup it had just cached outlived the insert for
+ *  the whole TTL: `/api/parents/me` kept answering "no parent" and
+ *  /welcome opened with empty name fields. A refused expiry is now
+ *  handed to `after()`, which runs it as soon as that render's
+ *  response has gone out (a redirect included), so the browser's
+ *  next request reads Xano again. Reads later in the SAME render
+ *  still see the cached copy; one that decides a write there should
+ *  pass `fresh: true`.
+ *
+ *  Outside a Next request scope (tsx scripts, tests) both calls
+ *  throw — nothing is cached there, so that is swallowed. */
 export function expireXanoTable(table: string): void {
+  const expire = () => revalidateTag(cacheTagFor(table), { expire: 0 });
   try {
-    revalidateTag(cacheTagFor(table), { expire: 0 });
+    expire();
+    return;
   } catch {
-    // Not inside a route handler / server action — nothing cached.
+    // Refused: a Server Component render, or no request at all.
+  }
+  try {
+    after(() => {
+      try {
+        expire();
+      } catch (err) {
+        // Worth a line: a lost expiry serves the pre-write rows for up
+        // to the table's TTL.
+        console.warn(`[xano] could not expire cached ${table} after render:`, err);
+      }
+    });
+  } catch {
+    // Not inside a Next request — nothing cached.
   }
 }
 

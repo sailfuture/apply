@@ -54,7 +54,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle, Pencil } from "lucide-react";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { apiFetch } from "@/hooks/use-api";
+import {
+  apiFetch,
+  stepSavesSettled,
+  trackStepSave,
+  useApiCacheReader,
+  type ApiCacheReader,
+} from "@/hooks/use-api";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { currentStopOrBlank } from "@/lib/bus-stop-picker";
@@ -158,6 +164,157 @@ function getDirtyFields(
   return dirty as Partial<Application>;
 }
 
+// Required on every student's card, in the order the card shows them.
+// `missingAppFields` (and through it `isAppComplete`), the red outlines
+// and the jump to the first missing field all read this one list.
+const REQUIRED_APP_FIELDS = [
+  "current_previous_school",
+  "last_grade_completed",
+  "current_grade",
+  "describe_student_strengths",
+  "describe_student_opportunities_for_growth",
+] as const;
+type RequiredAppField = (typeof REQUIRED_APP_FIELDS)[number] | "bus_stop";
+
+// Whitespace alone doesn't count as an answer.
+const isBlank = (v: string | null | undefined) => !v || v.trim().length === 0;
+
+/** What a student's card still needs before "Complete", top to bottom. */
+function missingAppFields(app: Application): RequiredAppField[] {
+  const missing: RequiredAppField[] = REQUIRED_APP_FIELDS.filter((f) =>
+    isBlank(app[f])
+  );
+  // Transportation: if the family opted in, they must pick a stop.
+  // Off = trivially complete (it's an explicit "no thanks").
+  if (app.is_bus_transportation && isBlank(app.bus_stop)) {
+    missing.push("bus_stop");
+  }
+  return missing;
+}
+
+/** DOM id of a required field's control. Doubles as that field's key
+ *  in the page's set of flagged fields. */
+const appFieldId = (appId: number, field: RequiredAppField) =>
+  `app-${appId}-${field}`;
+
+/** Bring a field into view and put the cursor in it. */
+function focusField(id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const reduceMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)"
+  ).matches;
+  el.scrollIntoView({
+    behavior: reduceMotion ? "instant" : "smooth",
+    block: "center",
+  });
+  // `preventScroll`: focusing would otherwise jump straight there and
+  // cut the smooth scroll short.
+  el.focus({ preventScroll: true });
+}
+
+/** This year's applications out of the family's full list, in the
+ *  shape and order the page works with. */
+function yearApplications(
+  allApps: Application[],
+  yearId: number,
+  stops: BusStop[]
+): Application[] {
+  return (
+    allApps
+      .filter((a) => a.registration_school_years_id === yearId)
+      // Normalize string fields the local interface treats as
+      // required-strings — Xano returns null for blank text columns
+      // on rows that predate the addition of `primary_home`, and
+      // null leaks through `app.primary_home` reads as a falsy
+      // string that triggers React's controlled-input warning.
+      .map((a) => ({
+        ...a,
+        primary_home: a.primary_home ?? "",
+        // Checked against the current stops, so a stop that was renamed
+        // or retired since the row was saved shows as "pick a stop"
+        // instead of riding along unseen.
+        bus_stop: a.is_bus_transportation
+          ? currentStopOrBlank(a.bus_stop, stops)
+          : (a.bus_stop ?? ""),
+      }))
+      // Match the students sort: id ASC = creation order, so a
+      // freshly-added student lands at the bottom of the list,
+      // not the top.
+      .sort((a, b) => a.id - b.id)
+  );
+}
+
+interface StartTerm {
+  id: number;
+  term_name: string;
+  start_date: string | null;
+}
+
+const termsKey = (yearId: number) => `/api/academic-terms?yearId=${yearId}`;
+
+interface RosterSeed {
+  parents: Parent[];
+  yearName: string;
+  students: Student[];
+  applications: Application[];
+  busStops: BusStop[];
+  startTerms: StartTerm[];
+}
+
+/**
+ * Everything the page's first paint needs, out of what SWR already
+ * holds: the header and the side nav keep the family, the years, the
+ * students and the applications loaded, and this page writes what it
+ * loads and saves back into those entries. Moving here from another
+ * step starts from them instead of a skeleton. Null when a piece the
+ * first paint needs is not there yet — the page then loads as before.
+ */
+function readRosterSeed(
+  readCached: ApiCacheReader,
+  yearId: number
+): RosterSeed | null {
+  const fam = readCached<{ parents?: Parent[] | null } | null>("/api/families");
+  const years = readCached<
+    { id: number; year_name: string; isActive?: boolean }[]
+  >("/api/school-years");
+  const students = readCached<Student[]>("/api/students");
+  const apps = readCached<Application[]>("/api/applications");
+  if (
+    !fam ||
+    !Array.isArray(years) ||
+    !Array.isArray(students) ||
+    !Array.isArray(apps)
+  ) {
+    return null;
+  }
+  const stops = readCached<BusStop[]>("/api/bus-stops");
+  const busStops = Array.isArray(stops) ? stops : [];
+  const applications = yearApplications(apps, yearId, busStops);
+  // A card with the bus switched on draws the stop list, and its saved
+  // stop only reads as current when checked against that list.
+  if (
+    !Array.isArray(stops) &&
+    applications.some((a) => a.is_bus_transportation)
+  ) {
+    return null;
+  }
+  const year = years.find((y) => y.id === yearId);
+  const terms = readCached<StartTerm[]>(termsKey(yearId));
+  // The current year asks which term the student starts; without the
+  // terms that question would pop in a moment later.
+  if (year?.isActive && !Array.isArray(terms)) return null;
+  return {
+    parents: fam.parents ?? [],
+    yearName: year?.year_name ?? "",
+    // id ASC = creation order; see `fetchData`.
+    students: students.slice().sort((a, b) => a.id - b.id),
+    applications,
+    busStops,
+    startTerms: Array.isArray(terms) ? terms : [],
+  };
+}
+
 function formatAge(dob: string): string {
   const birth = new Date(dob);
   const today = new Date();
@@ -209,10 +366,21 @@ export default function StudentsStepPage() {
   } = useApplicationFlow();
   const { mutate } = useSWRConfig();
 
-  const [parents, setParents] = useState<Parent[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [busStops, setBusStops] = useState<BusStop[]>([]);
+  // See `readRosterSeed`. `fetchData` still runs behind a seeded page
+  // and replaces the seed with what the server says.
+  const readCached = useApiCacheReader();
+  const [seed] = useState(() => readRosterSeed(readCached, yearId));
+
+  const [parents, setParents] = useState<Parent[]>(() => seed?.parents ?? []);
+  const [students, setStudents] = useState<Student[]>(
+    () => seed?.students ?? []
+  );
+  const [applications, setApplications] = useState<Application[]>(
+    () => seed?.applications ?? []
+  );
+  const [busStops, setBusStops] = useState<BusStop[]>(
+    () => seed?.busStops ?? []
+  );
   // UI-only — keyed by application id, holds which parent's address
   // the family used to pick a stop. Not persisted (the actual stop
   // is what gets saved on the application row); just a hint that
@@ -220,23 +388,64 @@ export default function StudentsStepPage() {
   const [busAddressByApp, setBusAddressByApp] = useState<
     Record<number, number>
   >({});
-  const [yearName, setYearName] = useState("");
+  const [yearName, setYearName] = useState(() => seed?.yearName ?? "");
   // Terms for this year, populated only when it's the CURRENT school
   // year — a family joining mid-year picks which term their student
   // starts. Next-year applicants start at the beginning, so it's not
   // asked. Optional, never blocks completion.
-  const [startTerms, setStartTerms] = useState<
-    { id: number; term_name: string; start_date: string | null }[]
-  >([]);
-  const [loading, setLoading] = useState(true);
+  const [startTerms, setStartTerms] = useState<StartTerm[]>(
+    () => seed?.startTerms ?? []
+  );
+  const [loading, setLoading] = useState(seed === null);
   // Set only when the FIRST load fails. A refetch that fails after the
   // roster is on screen (after adding a student, say) keeps the data —
   // same rule as the SWR-driven pages: only an error with nothing
   // behind it blocks the page.
   const [loadFailed, setLoadFailed] = useState(false);
-  const loadedOnceRef = useRef(false);
+  const loadedOnceRef = useRef(seed !== null);
   const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
-  const [savedApplications, setSavedApplications] = useState<Application[]>([]);
+  const [savedApplications, setSavedApplications] = useState<Application[]>(
+    () => seed?.applications ?? []
+  );
+  // Counts local changes to the roster (an edit not yet saved, a save
+  // going out, a student added or removed, a new photo). A background
+  // refresh that started before the latest one keeps the page's own
+  // students and applications — its copy may predate them.
+  const localChangesRef = useRef(0);
+  // Only the newest load may apply its result.
+  const loadSeqRef = useRef(0);
+
+  // Required fields the parent has been in and left, or that a failed
+  // "Complete" pointed at. A field is outlined in red only when it is in
+  // here AND still empty: a new student's card used to open with all
+  // five boxes red before anything had been typed.
+  const [flagged, setFlagged] = useState<ReadonlySet<string>>(() => new Set());
+  function flagFields(keys: string[]) {
+    setFlagged((prev) => {
+      if (keys.every((k) => prev.has(k))) return prev;
+      const next = new Set(prev);
+      for (const k of keys) next.add(k);
+      return next;
+    });
+  }
+  function isMissing(app: Application, field: RequiredAppField): boolean {
+    return flagged.has(appFieldId(app.id, field)) && isBlank(app[field]);
+  }
+
+  /** Apply a change to the cached `/api/applications` list (every year's
+   *  rows, as the hooks hold them), so the side nav and the next visit
+   *  to this step see what was just done here. */
+  const updateCachedApplications = useCallback(
+    (update: (apps: Application[]) => Application[]) => {
+      void mutate(
+        "/api/applications",
+        (curr: Application[] | undefined) =>
+          Array.isArray(curr) ? update(curr) : curr,
+        { revalidate: false }
+      );
+    },
+    [mutate]
+  );
   const [pendingNavPath, setPendingNavPath] = useState<string | null>(null);
   // Skeleton placeholder for a brand-new student that's mid-auto-add.
   // Set the moment the create sheet succeeds; cleared as soon as the
@@ -307,8 +516,21 @@ export default function StudentsStepPage() {
       });
       if (res.ok) {
         const updated = await res.json();
+        localChangesRef.current += 1;
         setStudents((prev) =>
           prev.map((s) => (s.id === studentId ? { ...s, photo: updated.photo } : s))
+        );
+        // Same change for the cached list the header reads and this
+        // step opens from next time.
+        void mutate(
+          "/api/students",
+          (curr: Student[] | undefined) =>
+            Array.isArray(curr)
+              ? curr.map((s) =>
+                  s.id === studentId ? { ...s, photo: updated.photo } : s
+                )
+              : curr,
+          { revalidate: false }
         );
       }
     } catch (err) {
@@ -318,8 +540,19 @@ export default function StudentsStepPage() {
     }
   }
 
-  const fetchData = useCallback(async () => {
+  // `background` is the load that runs behind a page already on screen
+  // (the one on arrival). It must not undo what the parent has done
+  // since it started; the loads the parent asks for (after adding or
+  // editing a student, "Try again") always apply, as they always have.
+  const fetchData = useCallback(async (opts?: { background?: boolean }) => {
+    const seq = ++loadSeqRef.current;
+    const changesAtStart = localChangesRef.current;
     try {
+      // A save from a moment ago (the one sent on the way out of this
+      // step last visit, or an address just changed on the Family step)
+      // has to land first, or this read can come back without it and
+      // show the old value.
+      await stepSavesSettled();
       // `apiFetch` retries a 401 once after refreshing the Clerk token
       // (a cold load can race that refresh). Any other non-2xx from the
       // four core endpoints used to be skipped silently, which rendered
@@ -337,83 +570,87 @@ export default function StudentsStepPage() {
       for (const res of [familyRes, yearsRes, studentsRes, appsRes]) {
         if (!res.ok) throw new Error(`API error ${res.status}`);
       }
-      if (familyRes.ok) {
-        // `/api/families` returns `null` (not an empty object) when the
-        // family record can't be loaded — JSON.parse keeps that as
-        // `null` rather than throwing, so a naive `fam.parents` blows
-        // up with "Cannot read properties of null". Optional-chain the
-        // read so the page just falls through to an empty parents
-        // list when the endpoint hands us null.
-        const fam = await familyRes.json();
-        setParents(fam?.parents ?? []);
+      // `/api/families` returns `null` (not an empty object) when the
+      // family record can't be loaded — JSON.parse keeps that as
+      // `null` rather than throwing, so a naive `fam.parents` blows
+      // up with "Cannot read properties of null". Optional-chain the
+      // read so the page just falls through to an empty parents
+      // list when the endpoint hands us null.
+      const fam: { parents?: Parent[] | null } | null = await familyRes.json();
+      const years: { id: number; year_name: string; isActive?: boolean }[] =
+        await yearsRes.json();
+      const allStudents: Student[] = await studentsRes.json();
+      const allApps: Application[] = await appsRes.json();
+      const loadedStops: BusStop[] | null = busRes.ok
+        ? await busRes.json()
+        : null;
+      // A newer load started while this one was out; it decides.
+      if (seq !== loadSeqRef.current) return;
+
+      // The parent only reads these here, so they always take the
+      // server's answer.
+      setParents(fam?.parents ?? []);
+      const found = years.find((y) => y.id === yearId);
+      if (found) setYearName(found.year_name);
+      if (found?.isActive) {
+        fetch(termsKey(yearId))
+          .then((r) => (r.ok ? r.json() : []))
+          .then((t) => {
+            const terms: StartTerm[] = Array.isArray(t) ? t : [];
+            setStartTerms(terms);
+            void mutate(termsKey(yearId), terms, { revalidate: false });
+          })
+          .catch(() => setStartTerms([]));
       }
-      if (yearsRes.ok) {
-        const years = await yearsRes.json();
-        const found = years.find((y: { id: number }) => y.id === yearId);
-        if (found) setYearName(found.year_name);
-        if (found?.isActive) {
-          fetch(`/api/academic-terms?yearId=${yearId}`)
-            .then((r) => (r.ok ? r.json() : []))
-            .then((t) => setStartTerms(Array.isArray(t) ? t : []))
-            .catch(() => setStartTerms([]));
-        }
-      }
-      let loadedStudents: Student[] = [];
-      if (studentsRes.ok) {
-        loadedStudents = await studentsRes.json();
+      if (loadedStops) setBusStops(loadedStops);
+
+      const keepLocal =
+        opts?.background === true &&
+        loadedOnceRef.current &&
+        localChangesRef.current !== changesAtStart;
+      if (!keepLocal) {
         // Sort students by id ASC (creation order). Xano doesn't
         // guarantee a deterministic order on filtered GETs, so the
         // newly-added student would otherwise float to the top and
         // disrupt the parent's mental model ("the kid I just added
         // is at the bottom"). Sorting client-side keeps the page
         // stable regardless of Xano's response order.
-        loadedStudents = loadedStudents
-          .slice()
-          .sort((a, b) => a.id - b.id);
-        setStudents(loadedStudents);
-      }
-      // Stops first: the application rows below are checked against
-      // them, so a stop that was renamed or retired since the row was
-      // saved shows as "pick a stop" instead of riding along unseen.
-      const loadedStops: BusStop[] = busRes.ok ? await busRes.json() : [];
-      if (appsRes.ok) {
-        const allApps: Application[] = await appsRes.json();
-        const yearApps = allApps
-          .filter((a) => a.registration_school_years_id === yearId)
-          // Normalize string fields the local interface treats as
-          // required-strings — Xano returns null for blank text columns
-          // on rows that predate the addition of `primary_home`, and
-          // null leaks through `app.primary_home` reads as a falsy
-          // string that triggers React's controlled-input warning.
-          .map((a) => ({
-            ...a,
-            primary_home: a.primary_home ?? "",
-            bus_stop: a.is_bus_transportation
-              ? currentStopOrBlank(a.bus_stop, loadedStops)
-              : (a.bus_stop ?? ""),
-          }))
-          // Match the students sort: id ASC = creation order, so a
-          // freshly-added student lands at the bottom of the list,
-          // not the top.
-          .sort((a, b) => a.id - b.id);
+        setStudents(allStudents.slice().sort((a, b) => a.id - b.id));
+        const yearApps = yearApplications(allApps, yearId, loadedStops ?? []);
         setApplications(yearApps);
         setSavedApplications(yearApps);
         // Keep all student cards open on initial load — don't auto-collapse
         // completed ones. Users can manually collapse via the chevron.
       }
-      if (busRes.ok) setBusStops(loadedStops);
+
+      // Hand the fresh copies to SWR too: they are what this step (and
+      // the header and side nav) start from next time. Nothing else
+      // loads the bus stops. The roster is left alone when the page
+      // kept its own — the cache already carries those changes, and
+      // this copy may predate them. The family entry is the Family
+      // step's and the header's to keep.
+      if (loadedStops) {
+        void mutate("/api/bus-stops", loadedStops, { revalidate: false });
+      }
+      if (!keepLocal) {
+        void mutate("/api/students", allStudents, { revalidate: false });
+        void mutate("/api/applications", allApps, { revalidate: false });
+      }
       loadedOnceRef.current = true;
       setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch:", err);
-      if (!loadedOnceRef.current) setLoadFailed(true);
+      if (seq === loadSeqRef.current && !loadedOnceRef.current) {
+        setLoadFailed(true);
+      }
     } finally {
-      setLoading(false);
+      // An overtaken load leaves the skeleton to the one that replaced it.
+      if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [yearId]);
+  }, [yearId, mutate]);
 
   useEffect(() => {
-    fetchData();
+    fetchData({ background: true });
   }, [fetchData]);
 
   // Hydrate the parent-address radio state from each application's
@@ -454,8 +691,12 @@ export default function StudentsStepPage() {
       });
       if (res.ok) {
         const newApp = await res.json();
+        localChangesRef.current += 1;
         setApplications((prev) => [...prev, newApp]);
         setSavedApplications((prev) => [...prev, newApp]);
+        updateCachedApplications((apps) =>
+          apps.some((a) => a.id === newApp.id) ? apps : [...apps, newApp]
+        );
 
         // Adding a student invalidates any previously-completed section
         // whose validation depends on per-student data. Flip those bools
@@ -513,8 +754,10 @@ export default function StudentsStepPage() {
   }
 
   function handleRemoveStudent(appId: number) {
+    localChangesRef.current += 1;
     setApplications((prev) => prev.filter((a) => a.id !== appId));
     setSavedApplications((prev) => prev.filter((a) => a.id !== appId));
+    updateCachedApplications((apps) => apps.filter((a) => a.id !== appId));
     setPendingDeleteStudent(null);
     fetch(`/api/applications/${appId}`, { method: "DELETE" })
       .then(async (res) => {
@@ -529,18 +772,9 @@ export default function StudentsStepPage() {
   function isAppComplete(app: Application): boolean {
     // Student Details completion — school-history fields + transportation
     // (transportation now lives on this step). NWEA still lives on its
-    // own step; SUFS lives on Financial Aid. Trim before checking so
-    // whitespace-only values don't pass as complete.
-    const nonEmpty = (v: string | null | undefined) => !!v && v.trim().length > 0;
-    if (!nonEmpty(app.current_previous_school)) return false;
-    if (!nonEmpty(app.last_grade_completed)) return false;
-    if (!nonEmpty(app.current_grade)) return false;
-    if (!nonEmpty(app.describe_student_strengths)) return false;
-    if (!nonEmpty(app.describe_student_opportunities_for_growth)) return false;
-    // Transportation: if the family opted in, they must pick a stop.
-    // Off = trivially complete (it's an explicit "no thanks").
-    if (app.is_bus_transportation && !nonEmpty(app.bus_stop)) return false;
-    return true;
+    // own step; SUFS lives on Financial Aid. Whitespace-only values
+    // don't pass as complete (see `missingAppFields`).
+    return missingAppFields(app).length === 0;
   }
 
   function StudentStatusIcon({ complete }: { complete: boolean }) {
@@ -591,29 +825,55 @@ export default function StudentsStepPage() {
       const saved = savedApplications.find((s) => s.id === appId);
       const dirty = getDirtyFields(app, saved);
       if (Object.keys(dirty).length === 0) return true;
-      try {
-        const res = await fetch(`/api/applications/${appId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(dirty),
-          // Lets a save that starts as the page is being left finish.
-          keepalive: true,
-        });
+      localChangesRef.current += 1;
+      // The cached list gets the change straight away, so leaving the
+      // step and coming back shows it; a save that fails refetches the
+      // list, putting back what the server has.
+      const applyToCache = () =>
+        updateCachedApplications((apps) =>
+          apps.map((a) => (a.id === appId ? { ...a, ...dirty } : a))
+        );
+      applyToCache();
+      const request: Promise<void> = fetch(`/api/applications/${appId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dirty),
+        // Lets a save that starts as the page is being left finish.
+        keepalive: true,
+      }).then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => null);
-          console.error(`Failed to save application ${appId}:`, res.status, body);
-          return false;
+          // Short message for the pill; the response rides along as
+          // `cause` for the console line below.
+          throw new Error(`Save failed (${res.status})`, { cause: body });
         }
+      });
+      request.catch(() => void mutate("/api/applications"));
+      // Registered so the next load (see `fetchData`) waits for it.
+      trackStepSave(request);
+      try {
+        // Through `trackAutosave`, so the header pill reports THIS save.
+        // The timed autosave used to PATCH without telling it, and the
+        // pill went on showing the last save it had heard of — "Saved 2m
+        // ago", from the Family step, seconds after an autosave here.
+        await trackAutosave(request);
         setSavedApplications((prev) =>
           prev.map((s) => (s.id === appId ? { ...app } : s))
         );
+        // Once more now that it is saved: the 30-second refetch of the
+        // list may have overlapped the save and put the old row back.
+        applyToCache();
         return true;
       } catch (err) {
-        console.error(`Failed to save application ${appId}:`, err);
+        console.error(
+          `Failed to save application ${appId}:`,
+          err,
+          err instanceof Error ? err.cause : undefined
+        );
         return false;
       }
     },
-    [applications, savedApplications]
+    [applications, savedApplications, trackAutosave, mutate, updateCachedApplications]
   );
   const saveSingleAppRef = useRef(saveSingleApp);
   saveSingleAppRef.current = saveSingleApp;
@@ -621,14 +881,18 @@ export default function StudentsStepPage() {
   async function handleSaveAllApps() {
     setSavingAll(true);
     try {
-      const results = await trackAutosave(
+      // Each save reports to the pill itself (see `saveSingleApp`); this
+      // outer call is the last word, so a failed save has to fail it
+      // too or the pill would settle on "Saved".
+      await trackAutosave(
         Promise.all(
           applications.map((a) => saveSingleAppRef.current(a.id))
-        )
+        ).then((results) => {
+          if (results.some((ok) => !ok)) {
+            throw new Error("Some applications failed to save");
+          }
+        })
       );
-      if (results.some((ok) => !ok)) {
-        throw new Error("Some applications failed to save");
-      }
       mutate("/api/applications");
     } catch (err) {
       console.error("Failed to save:", err);
@@ -672,8 +936,16 @@ export default function StudentsStepPage() {
 
     const incomplete = visible.filter(({ app }) => !isAppComplete(app));
     if (incomplete.length > 0) {
-      const { student } = incomplete[0];
+      const { app, student } = incomplete[0];
       toast.error(`${student.first_name} ${student.last_name}: Please fill out all required fields.`);
+      // The toast alone left the parent hunting. Turn every missing
+      // field red, on every student, and go to the first one.
+      flagFields(
+        incomplete.flatMap(({ app: a }) =>
+          missingAppFields(a).map((f) => appFieldId(a.id, f))
+        )
+      );
+      focusField(appFieldId(app.id, missingAppFields(app)[0]));
       throw new Error("Validation failed");
     }
     await handleSaveAllAppsRef.current();
@@ -734,6 +1006,9 @@ export default function StudentsStepPage() {
       const saved = savedApplications.find((s) => s.id === app.id);
       const dirty = getDirtyFields(app, saved);
       if (Object.keys(dirty).length === 0) continue;
+      // An edit the server has not seen: a load still out must not
+      // replace the roster under it (see `fetchData`).
+      localChangesRef.current += 1;
       const existing = timers.get(app.id);
       if (existing) clearTimeout(existing);
       const appId = app.id;
@@ -1036,12 +1311,16 @@ export default function StudentsStepPage() {
                     <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
                       <Field>
                         <FieldLabel className="text-xs">
-                          Current / Previous School
+                          Current / Previous School <span className="text-red-400">*</span>
                         </FieldLabel>
                         <Input
-                          className={!app.current_previous_school ? "border-2 border-red-400" : ""}
+                          id={appFieldId(app.id, "current_previous_school")}
+                          className={isMissing(app, "current_previous_school") ? "border-2 border-red-400" : ""}
                           placeholder="School name"
                           value={app.current_previous_school || ""}
+                          onBlur={() =>
+                            flagFields([appFieldId(app.id, "current_previous_school")])
+                          }
                           onChange={(e) =>
                             setApplications((prev) =>
                               prev.map((a) =>
@@ -1055,12 +1334,16 @@ export default function StudentsStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Current Grade
+                          Current Grade <span className="text-red-400">*</span>
                         </FieldLabel>
                         <Input
-                          className={!app.last_grade_completed ? "border-2 border-red-400" : ""}
+                          id={appFieldId(app.id, "last_grade_completed")}
+                          className={isMissing(app, "last_grade_completed") ? "border-2 border-red-400" : ""}
                           placeholder="e.g. 7th"
                           value={app.last_grade_completed || ""}
+                          onBlur={() =>
+                            flagFields([appFieldId(app.id, "last_grade_completed")])
+                          }
                           onChange={(e) =>
                             setApplications((prev) =>
                               prev.map((a) =>
@@ -1074,12 +1357,16 @@ export default function StudentsStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Incoming Grade
+                          Incoming Grade <span className="text-red-400">*</span>
                         </FieldLabel>
                         <Input
-                          className={!app.current_grade ? "border-2 border-red-400" : ""}
+                          id={appFieldId(app.id, "current_grade")}
+                          className={isMissing(app, "current_grade") ? "border-2 border-red-400" : ""}
                           placeholder="e.g. 8th"
                           value={app.current_grade || ""}
+                          onBlur={() =>
+                            flagFields([appFieldId(app.id, "current_grade")])
+                          }
                           onChange={(e) =>
                             setApplications((prev) =>
                               prev.map((a) =>
@@ -1130,12 +1417,16 @@ export default function StudentsStepPage() {
                     <div className="grid gap-4 sm:grid-cols-2 mt-4">
                       <Field>
                         <FieldLabel className="text-xs">
-                          Describe Student Strengths
+                          Describe Student Strengths <span className="text-red-400">*</span>
                         </FieldLabel>
                         <textarea
-                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!app.describe_student_strengths ? "border-2 border-red-400" : "border-input"}`}
+                          id={appFieldId(app.id, "describe_student_strengths")}
+                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${isMissing(app, "describe_student_strengths") ? "border-2 border-red-400" : "border-input"}`}
                           placeholder="Student's strengths..."
                           value={app.describe_student_strengths || ""}
+                          onBlur={() =>
+                            flagFields([appFieldId(app.id, "describe_student_strengths")])
+                          }
                           onChange={(e) =>
                             setApplications((prev) =>
                               prev.map((a) =>
@@ -1149,12 +1440,16 @@ export default function StudentsStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Describe Student Opportunities for Growth
+                          Describe Student Opportunities for Growth <span className="text-red-400">*</span>
                         </FieldLabel>
                         <textarea
-                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!app.describe_student_opportunities_for_growth ? "border-2 border-red-400" : "border-input"}`}
+                          id={appFieldId(app.id, "describe_student_opportunities_for_growth")}
+                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${isMissing(app, "describe_student_opportunities_for_growth") ? "border-2 border-red-400" : "border-input"}`}
                           placeholder="Areas for growth..."
                           value={app.describe_student_opportunities_for_growth || ""}
+                          onBlur={() =>
+                            flagFields([appFieldId(app.id, "describe_student_opportunities_for_growth")])
+                          }
                           onChange={(e) =>
                             setApplications((prev) =>
                               prev.map((a) =>
@@ -1295,12 +1590,16 @@ export default function StudentsStepPage() {
                             <span className="text-red-400">*</span>
                           </FieldLabel>
                           <select
+                            id={appFieldId(app.id, "bus_stop")}
                             className={`flex h-9 w-full items-center justify-between rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                              !app.bus_stop
+                              isMissing(app, "bus_stop")
                                 ? "border-red-400"
                                 : "border-input"
                             }`}
                             value={app.bus_stop || ""}
+                            onBlur={() =>
+                              flagFields([appFieldId(app.id, "bus_stop")])
+                            }
                             onChange={(e) =>
                               setApplications((prev) =>
                                 prev.map((a) =>

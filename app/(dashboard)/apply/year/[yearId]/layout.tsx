@@ -314,28 +314,41 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                 <div className="h-40 w-full rounded-lg bg-muted animate-pulse" />
               </div>
             )}
-            {/* When the section is marked complete, dim AND fully block
-                interaction with the page contents (`pointer-events-none`).
-                Previously only the opacity changed — inputs underneath
-                were still focusable / editable, which is why "unlock"
-                appeared to do nothing on pages whose individual inputs
-                weren't separately gated by a lock state. The block lifts
-                automatically as soon as `saveOptions.completed` flips
+            {/* When the section is marked complete, dim it and lock it.
+                The block lifts as soon as `saveOptions.completed` flips
                 false (i.e. when onUnlock fires from the bottom-bar
-                button below). */}
-            <div
+                button below).
+
+                A <fieldset disabled>, not a div. `pointer-events-none`
+                alone only stops the mouse: every field stayed reachable
+                with Tab and still saved what was typed into it, so a
+                section the school had already checked could change
+                underneath them. A disabled fieldset switches off every
+                input, select and button inside it for keyboard and
+                mouse alike.
+
+                What stays usable in a locked section is anything that
+                is a link: `a[href]` gets its pointer events back, so an
+                uploaded document or a signed PDF still opens. An action
+                that must keep working there (printing the tuition
+                breakdown) is therefore written as a link, not a button.
+
+                `min-w-0` undoes a fieldset's built-in minimum width, and
+                the opacity reset keeps disabled fields from being dimmed
+                twice (the whole section is already dimmed). */}
+            <fieldset
+              disabled={saveOptions.completed === true}
               className={
                 awaitingProgress
-                  ? "invisible"
+                  ? "min-w-0 invisible"
                   : saveOptions.completed
-                    ? "opacity-50 pointer-events-none select-none"
-                    : ""
+                    ? "min-w-0 opacity-50 pointer-events-none select-none [&_:disabled]:opacity-100! [&_a[href]]:pointer-events-auto"
+                    : "min-w-0"
               }
-              aria-disabled={saveOptions.completed || undefined}
               aria-busy={awaitingProgress || undefined}
             >
               {children}
-            </div>
+            </fieldset>
 
             {/*
               Bottom nav behaviour:
@@ -387,32 +400,47 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                     current section's Complete button. */}
                 <div className="xl:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background">
                   <div className="mx-auto w-full max-w-4xl flex items-stretch gap-2 px-3 py-3">
+                    {/* Every control in this bar is the same 44px tall.
+                        They used to be 36px and 41px side by side (the
+                        shared Button's fixed height next to a
+                        hand-rolled button's padding). */}
                     <Button
                       type="button"
                       variant="outline"
-                      className="flex-1 min-w-0 py-2.5 bg-white"
+                      className="flex-1 min-w-0 h-11 bg-white"
                       onClick={() => router.push(overviewPath)}
                     >
                       <span className="truncate">Return to Dashboard</span>
                     </Button>
 
                     {saveOptions.completed ? (
+                      // Two lines, so "Click to edit" always shows: it
+                      // is the only cue that this button unlocks the
+                      // section. On one line it was the part a phone cut
+                      // off ("Family Section C…").
                       <button
-                        className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-md bg-white border border-input px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors cursor-pointer"
+                        className="flex-1 min-w-0 h-11 flex items-center justify-center gap-2 rounded-md bg-white border border-input px-3 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors cursor-pointer"
                         onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
                       >
                         <CheckCircle2 className="size-4 text-green-600 shrink-0" />
-                        <span className="truncate">
-                          {saveOptions.completedLabel ?? "Section Completed"}
-                          <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                            (Click to Edit)
+                        <span className="min-w-0 text-left leading-tight">
+                          {/* A phone has room for one word here; the
+                              step's name is already the page title. */}
+                          <span className="block truncate sm:hidden">
+                            Completed
+                          </span>
+                          <span className="hidden truncate sm:block">
+                            {saveOptions.completedLabel ?? "Section Completed"}
+                          </span>
+                          <span className="block truncate text-xs font-normal text-muted-foreground">
+                            Click to edit
                           </span>
                         </span>
                       </button>
                     ) : saveOptions.label ? (
                       <Button
                         variant={saveOptions.disabled ? "outline" : "default"}
-                        className={`flex-1 min-w-0 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
+                        className={`flex-1 min-w-0 h-11 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
                         onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
                         disabled={saveHandler ? (saveOptions.disabled || showSpinner) : false}
                       >
@@ -428,7 +456,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                         )}
                       </Button>
                     ) : (
-                      <div className="flex-1 min-w-0 h-10 rounded-md bg-muted animate-pulse" />
+                      <div className="flex-1 min-w-0 h-11 rounded-md bg-muted animate-pulse" />
                     )}
                   </div>
                 </div>

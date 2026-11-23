@@ -535,19 +535,26 @@ export default function TuitionPage() {
             Review your financial aid award and tuition payment details for the upcoming school year.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          onClick={() => {
-            window.print();
-          }}
-        >
-          <svg className="size-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+        {/* A link, not a button, on purpose. Once this step is completed
+            the layout locks it by disabling every button and field in
+            it, and that is exactly when a parent wants a copy: as a
+            button this was dead from the moment they finished. Links
+            stay live in a locked section. */}
+        <Button asChild variant="outline" size="sm" className="shrink-0">
+          <a
+            href="#print"
+            role="button"
+            onClick={(e) => {
+              e.preventDefault();
+              window.print();
+            }}
+          >
+          <svg className="size-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path d="M13.75 7h-7.5a.75.75 0 01-.75-.75V3.25a.75.75 0 01.75-.75h7.5a.75.75 0 01.75.75v3a.75.75 0 01-.75.75zM5.5 9.25a.75.75 0 000 1.5h.25a.75.75 0 000-1.5H5.5z" />
             <path fillRule="evenodd" d="M3.5 7A1.5 1.5 0 002 8.5v4A1.5 1.5 0 003.5 14h.75v2.25a.75.75 0 00.75.75h10a.75.75 0 00.75-.75V14h.75a1.5 1.5 0 001.5-1.5v-4A1.5 1.5 0 0016.5 7h-13zm10 5.5H6.5v3.5h7v-3.5z" clipRule="evenodd" />
           </svg>
           Download PDF
+          </a>
         </Button>
       </div>
 

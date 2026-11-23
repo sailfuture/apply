@@ -624,14 +624,13 @@ function FileUpload(props: FileUploadProps) {
       }
 
       if (processedFiles.length > 0) {
+        // The ADD_FILES reducer above already calls `onValueChange` with
+        // the full list. This spot used to call it a SECOND time when the
+        // component is controlled. Every caller here uploads from
+        // `onValueChange`, so each accepted batch started two upload
+        // loops: every file was sent to the server twice (the extra copy
+        // was hidden because both loops then saved the same list).
         store.dispatch({ type: "ADD_FILES", files: processedFiles });
-
-        if (isControlled && propsRef.current.onValueChange) {
-          const currentFiles = Array.from(store.getState().files.values()).map(
-            (f) => f.file,
-          );
-          propsRef.current.onValueChange([...currentFiles]);
-        }
 
         if (propsRef.current.onAccept) {
           propsRef.current.onAccept(processedFiles);
@@ -650,7 +649,6 @@ function FileUpload(props: FileUploadProps) {
     },
     [
       store,
-      isControlled,
       propsRef,
       onFilesUpload,
       maxFiles,

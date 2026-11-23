@@ -128,7 +128,9 @@ export default function VolunteerHoursPage() {
       });
     } else {
       updateSaveOptions({
-        label: "Acknowledge & Continue",
+        // Says what it does. It read "Acknowledge & Continue", but it
+        // records the acknowledgment and stays on this page.
+        label: "Acknowledge Volunteer Hours",
         disabled: !signatureMeta || signatureUploading || printedName.trim() === "",
         saving: submitting,
         completed: false,

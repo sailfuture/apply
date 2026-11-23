@@ -110,15 +110,26 @@ export function PreSubmitReviewModal({
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+      {/* `sm:` on the width: the phone cap (the component's own
+          `max-w-xs`) stays, and from 640px up this replaces the
+          default `sm:max-w-lg`. A bare `max-w-2xl` would lose to it. */}
+      <AlertDialogContent className="sm:max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
         <AlertDialogHeader>
           <AlertDialogTitle>
             {allReady ? "Ready to submit?" : "A few sections still need attention"}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {allReady
-              ? `Once you submit, you won't be able to edit your ${noun} without contacting the school.`
-              : "Each section below must be marked complete before you can submit. Use Fix to jump to the section."}
+            {/* The two phases really do differ. A submitted
+                application can be reopened by the parent from the
+                "under review" screen (it unsubmits); this used to say
+                it couldn't be edited, and the very next screen offered
+                "Click here to edit your application". A submitted
+                registration has no such way back. */}
+            {!allReady
+              ? "Each section below must be marked complete before you can submit. Use Fix to jump to the section."
+              : phase === "registration"
+                ? `Once you submit, you won't be able to edit your ${noun} without contacting the school.`
+                : "The school starts its review once you submit. If you need to change something afterward, you can reopen your application from the next screen; that takes it out of review until you submit again."}
           </AlertDialogDescription>
         </AlertDialogHeader>
 

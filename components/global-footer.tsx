@@ -31,22 +31,28 @@ export function GlobalFooter() {
           <span className="hidden lg:inline truncate">Where the Classroom Meets the Real World.</span>
         </div>
 
-        {/* Links + Socials — always visible */}
+        {/* Links + Socials — always visible. On a phone the website
+            link is its icon only: with the address spelled out, this
+            group took the row and the copyright beside it was cut to
+            "© 2026 SailFuture A…". Each link carries padding pulled
+            back by an equal negative margin, so it looks the same but
+            is a 32px target instead of a 12–16px one. */}
         <div className="flex items-center gap-4 shrink-0">
           <a
             href="https://sailfutureacademy.org"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 hover:text-foreground transition-colors"
+            aria-label="SailFuture Academy website (opens in a new tab)"
+            className="-m-2 flex items-center gap-1 p-2 hover:text-foreground transition-colors"
           >
-            sailfutureacademy.org
-            <ExternalLink className="size-3" />
+            <span className="hidden sm:inline">sailfutureacademy.org</span>
+            <ExternalLink className="size-4 sm:size-3" aria-hidden="true" />
           </a>
           <a
             href="https://facebook.com/sailfuture"
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors"
+            className="-m-2 p-2 hover:text-foreground transition-colors"
             aria-label="Facebook"
           >
             <FacebookIcon className="size-4" />
@@ -55,7 +61,7 @@ export function GlobalFooter() {
             href="https://instagram.com/sailfuture"
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors"
+            className="-m-2 p-2 hover:text-foreground transition-colors"
             aria-label="Instagram"
           >
             <InstagramIcon className="size-4" />

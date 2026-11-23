@@ -26,6 +26,24 @@ const nextConfig: NextConfig = {
         destination: "/apply/year/:yearId/:rest*",
         permanent: true,
       },
+      // Old addresses of two signing steps. Each used to be a second,
+      // unmaintained copy of its signing page that nothing linked to
+      // but that still CREATED a PandaDoc document for anyone who
+      // opened it. The pages are gone; a bookmark or an old email
+      // lands on the step that replaced them. Redirected here rather
+      // than from a page so it is a real redirect: a page under the
+      // dashboard's loading boundary answers 200 and redirects late.
+      {
+        source: "/apply/year/:yearId/agreement",
+        destination: "/apply/year/:yearId/enrollment-signing",
+        permanent: false,
+      },
+      {
+        // The waiver is signed inside the Registration Packet step now.
+        source: "/apply/year/:yearId/waiver",
+        destination: "/apply/year/:yearId/registration",
+        permanent: false,
+      },
     ];
   },
 };

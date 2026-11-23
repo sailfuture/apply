@@ -404,12 +404,14 @@ function DocumentGuide({
           </div>
         </PopoverContent>
       </Popover>
+      {/* `pointer-events-auto` keeps this link clickable in a completed
+          (locked) section, where it is still reachable by keyboard. */}
       <a
         href={guide.sourceUrl}
         target="_blank"
         rel="noopener noreferrer"
         aria-label={guide.sourceLabel}
-        className="inline-flex items-center justify-center size-4 rounded text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
+        className="pointer-events-auto inline-flex items-center justify-center size-4 rounded text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
       >
         <ExternalLink className="size-3.5" />
       </a>
@@ -480,6 +482,26 @@ function isParentComplete(p: Parent): boolean {
 
 function isEmergencyContactComplete(c: EmergencyContact): boolean {
   return !!(c.first_name && c.last_name && c.email && c.phone && c.relationship && c.address_line_1 && c.city && c.state && c.zipcode);
+}
+
+/** A new emergency contact card nobody has typed into yet. Every family
+ *  is shown one (and "Add Emergency Contact" makes more), but it is not a
+ *  contact until it has something in it: saving it as it stood created a
+ *  blank row in the database. */
+function isBlankNewContact(c: EmergencyContact): boolean {
+  if (!c._isNew) return false;
+  return ![
+    c.first_name,
+    c.last_name,
+    c.email,
+    c.phone,
+    c.relationship,
+    c.address_line_1,
+    c.address_line_2,
+    c.city,
+    c.state,
+    c.zipcode,
+  ].some((v) => (v ?? "").trim() !== "");
 }
 
 function StatusIcon({ complete }: { complete: boolean }) {
@@ -558,6 +580,7 @@ function DocumentUpload({
   onUploaded,
   onRemoved,
   invalid = false,
+  locked = false,
 }: {
   label: string;
   /** Current array of uploaded file metadata (Xano file shape). */
@@ -569,24 +592,43 @@ function DocumentUpload({
   onRemoved: (index: number) => void;
   /** When true AND the array is empty, highlight the dropzone red. */
   invalid?: boolean;
+  /** The section is completed: uploaded files can still be opened, but
+   *  none can be added or removed. */
+  locked?: boolean;
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
+  // The dropzone turned a file away (too big, wrong type, more than 5 at
+  // once). It does that without a word, so say so under the box.
+  const [rejected, setRejected] = useState(false);
+  // One batch uploads at a time. `queueRef` is what that batch still has
+  // to send, so a file taken off the list mid-upload is left out.
+  const uploadingRef = useRef(false);
+  const queueRef = useRef<File[]>([]);
 
   const hasAny = files.some((f) => hasFile(f));
 
   async function handleFilesChange(newFiles: File[]) {
     setPendingFiles(newFiles);
     setError(null);
+    queueRef.current = newFiles;
+    // FileUpload reports every batch it accepts twice (once from its
+    // store, once from its controlled-value path) and again whenever a
+    // queued file is removed. Each report used to start its own upload
+    // loop, so every file was uploaded twice. The loop that is already
+    // running picks the change up from `queueRef` instead.
+    if (uploadingRef.current) return;
     if (newFiles.length === 0) return;
 
     // Upload each selected file in series so errors surface one at a time
     // and partial successes are persisted.
+    uploadingRef.current = true;
     setUploading(true);
     try {
       for (const f of newFiles) {
+        if (!queueRef.current.includes(f)) continue;
         const formData = new FormData();
         formData.append("file", f);
         const res = await fetch("/api/upload", { method: "POST", body: formData });
@@ -595,6 +637,8 @@ function DocumentUpload({
           throw new Error(body?.error ?? `Upload failed (${res.status})`);
         }
         const metadata: FileMetadata = await res.json();
+        // Taken off the list while it was on its way: don't attach it.
+        if (!queueRef.current.includes(f)) continue;
         onUploaded(metadata);
       }
       setPendingFiles([]);
@@ -602,6 +646,8 @@ function DocumentUpload({
       setError(err instanceof Error ? err.message : "Upload failed");
       setPendingFiles([]);
     } finally {
+      uploadingRef.current = false;
+      queueRef.current = [];
       setUploading(false);
     }
   }
@@ -624,6 +670,9 @@ function DocumentUpload({
               <p className="text-xs text-muted-foreground">Uploaded successfully</p>
             </div>
             {file.path && (
+              // `pointer-events-auto`: the step layout puts
+              // `pointer-events-none` over a completed section, and an
+              // uploaded document should still open from there.
               <a
                 href={
                   (file.url as string) ??
@@ -631,7 +680,8 @@ function DocumentUpload({
                 }
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
+                aria-label={`Open ${(file.name as string) || `uploaded file ${idx + 1}`}`}
+                className="pointer-events-auto inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
               >
                 <ExternalLink className="size-4 text-muted-foreground" />
               </a>
@@ -640,6 +690,7 @@ function DocumentUpload({
               variant="ghost"
               size="icon"
               className="size-7 shrink-0"
+              disabled={locked}
               onClick={() => setConfirmRemove(idx)}
             >
               <X className="size-4" />
@@ -648,15 +699,22 @@ function DocumentUpload({
         );
       })}
 
-      {/* Dropzone — always rendered so parents can add additional files. */}
+      {/* Dropzone — always rendered so parents can add additional files.
+          `multiple` lets the file picker take several at once, the same
+          as dropping them. The capture handlers clear the "not added"
+          note when the parent starts their next attempt. */}
       <FileUpload
+        multiple
         maxFiles={5}
         maxSize={10 * 1024 * 1024}
         accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
         className="w-full"
         value={pendingFiles}
         onValueChange={handleFilesChange}
-        disabled={uploading}
+        onFileReject={() => setRejected(true)}
+        onClickCapture={() => setRejected(false)}
+        onDropCapture={() => setRejected(false)}
+        disabled={uploading || locked}
       >
         <FileUploadDropzone
           className={`flex-row gap-3 px-4 py-3 cursor-pointer ${
@@ -708,6 +766,12 @@ function DocumentUpload({
         </FileUploadList>
       </FileUpload>
       {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+      {rejected && (
+        <p className="text-xs text-red-600 mt-1">
+          Some files were not added. Each must be a PDF, JPG, PNG or HEIC,
+          10MB or smaller, and no more than 5 at once.
+        </p>
+      )}
 
       <AlertDialog
         open={confirmRemove !== null}
@@ -792,6 +856,24 @@ export default function RegistrationPage() {
   const [packetsLoadFailed, setPacketsLoadFailed] = useState(false);
   const loadedOnceRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  // Unsaved-edit tracking for the autosave. Only a change the parent
+  // makes counts: the field handlers call `markEdited`, nothing else
+  // does. The autosave used to compare the whole form against a snapshot
+  // taken when the contacts finished loading. The packets arrive after
+  // that, so their arrival looked like an edit and the page saved itself
+  // on open — then saved again, because swapping a new contact's
+  // temporary id for its real one looked like a second edit.
+  const unsavedEditsRef = useRef(false);
+  // Bumped on every edit; the autosave effect restarts its timer on it.
+  const [editCount, setEditCount] = useState(0);
+  function markEdited() {
+    unsavedEditsRef.current = true;
+    setEditCount((n) => n + 1);
+  }
+  // Bumped each time "Complete Registration" is refused for missing
+  // fields; the effect near the autosave takes the parent to the first one.
+  const [validationJump, setValidationJump] = useState(0);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const [pendingDeleteContact, setPendingDeleteContact] = useState<{ id: number; name: string } | null>(null);
   const [pendingRemoveStudent, setPendingRemoveStudent] = useState<{ id: number; name: string } | null>(null);
   const [showValidation, setShowValidation] = useState(false);
@@ -1422,6 +1504,7 @@ export default function RegistrationPage() {
     setParents((prev) =>
       prev.map((p) => (p.id === parentId ? { ...p, [field]: value } : p))
     );
+    markEdited();
   }
 
   // A change to the signed-in parent's OWN email is also a change to
@@ -1491,6 +1574,7 @@ export default function RegistrationPage() {
     setEmergencyContacts((prev) =>
       prev.map((c) => (c.id === contactId ? { ...c, [field]: value } : c))
     );
+    markEdited();
   }
 
   function addEmergencyContact() {
@@ -1558,6 +1642,10 @@ export default function RegistrationPage() {
   // Student registration helpers
   // ---------------------------------------------------------------------------
 
+  // Sets a packet field in local state WITHOUT marking the form edited.
+  // Called directly only for values the server already holds (the
+  // signing statuses the PandaDoc routes write), which need no save. The
+  // form's own fields go through `editRegistration`.
   function updateRegistration(studentId: number, field: string, value: unknown) {
     setRegistrations((prev) => {
       const next = { ...prev };
@@ -1567,51 +1655,88 @@ export default function RegistrationPage() {
     });
   }
 
+  // A parent's own change to a packet field: set it and queue the autosave.
+  function editRegistration(studentId: number, field: string, value: unknown) {
+    updateRegistration(studentId, field, value);
+    markEdited();
+  }
+
   // -------------------------------------------------------------------------
   // Student document uploads — docs live on the evergreen `registration_students`
   // row as arrays, so each add/remove hits the student PATCH endpoint
   // directly and the students SWR cache is revalidated.
   // -------------------------------------------------------------------------
 
-  async function patchStudentDocs(
+  // Document saves go out one at a time, in the order they were made.
+  // Each one sends the whole list for its category, so two that reached
+  // Xano out of order would leave the older, shorter list in place.
+  const docSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // How many of those saves have not finished yet (running or waiting).
+  const docSavesWaitingRef = useRef(0);
+
+  function patchStudentDocs(
     studentId: number,
     field: StudentDocField,
-    nextArray: FileMetadata[]
+    change: (current: FileMetadata[]) => FileMetadata[]
   ) {
     // Optimistic update — patch the students SWR cache immediately so the
     // newly-uploaded file shows up in the uploaded-files list the same tick
     // the upload finishes. Without this, the DocumentUpload component
     // flickers: pendingFiles clears → brief empty gap → server revalidation
     // finally catches up and the green "uploaded" row appears.
-    swrMutate(
+    //
+    // The new list is built from the cache as it stands right now, never
+    // from the list a render was given. A batch of uploads reports its
+    // files one at a time through the callback it was handed when it
+    // started, so every file was added to the list as it was BEFORE the
+    // batch, and each save replaced the one before it: two files in, one
+    // kept.
+    const optimistic = swrMutate<Student[]>(
       "/api/students",
       (current: Student[] | undefined) => {
         if (!Array.isArray(current)) return current;
         return current.map((s) =>
-          s.id === studentId ? { ...s, [field]: nextArray } : s
+          s.id === studentId
+            ? {
+                ...s,
+                [field]: change((s[field] as FileMetadata[] | undefined) ?? []),
+              }
+            : s
         );
       },
       { revalidate: false }
     );
 
-    try {
-      const res = await fetch(`/api/students/${studentId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: nextArray }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Save failed (${res.status})`);
+    docSavesWaitingRef.current += 1;
+    const save = async () => {
+      try {
+        // The list exactly as this change left it.
+        const students = await optimistic;
+        const nextArray = students?.find((s) => s.id === studentId)?.[field];
+        if (!Array.isArray(nextArray)) {
+          throw new Error("Student list is not loaded");
+        }
+        const res = await fetch(`/api/students/${studentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: nextArray }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? `Save failed (${res.status})`);
+        }
+      } catch (err) {
+        console.error(`Failed to save ${field} for student ${studentId}:`, err);
+        toast.error("Failed to save document. Please try again.");
+      } finally {
+        docSavesWaitingRef.current -= 1;
       }
-      // Confirm with the server's copy (replaces the optimistic value).
-      await mutateStudents();
-    } catch (err) {
-      console.error(`Failed to save ${field} for student ${studentId}:`, err);
-      toast.error("Failed to save document. Please try again.");
-      // Revert — pull the true value back from Xano.
-      await mutateStudents();
-    }
+      // Settle on the server's copy: it confirms a save and takes back a
+      // failed one. Only once nothing else is waiting — a re-read between
+      // two saves would briefly remove a file whose save has not gone out.
+      if (docSavesWaitingRef.current === 0) await mutateStudents();
+    };
+    docSaveQueueRef.current = docSaveQueueRef.current.then(save, save);
   }
 
   function handleStudentDocUpload(
@@ -1619,9 +1744,7 @@ export default function RegistrationPage() {
     field: StudentDocField,
     meta: FileMetadata
   ) {
-    const student = enrolledStudents.find((s) => s.id === studentId);
-    const current = (student?.[field] as FileMetadata[] | undefined) ?? [];
-    patchStudentDocs(studentId, field, [...current, meta]);
+    patchStudentDocs(studentId, field, (current) => [...current, meta]);
   }
 
   function handleStudentDocRemove(
@@ -1629,13 +1752,19 @@ export default function RegistrationPage() {
     field: StudentDocField,
     index: number
   ) {
+    // The row the parent clicked, from the list they were looking at.
     const student = enrolledStudents.find((s) => s.id === studentId);
-    const current = (student?.[field] as FileMetadata[] | undefined) ?? [];
-    patchStudentDocs(
-      studentId,
-      field,
-      current.filter((_, i) => i !== index)
-    );
+    const target = ((student?.[field] as FileMetadata[] | undefined) ?? [])[index];
+    if (!target) return;
+    patchStudentDocs(studentId, field, (current) => {
+      // Same position unless the saved list has moved on since (an upload
+      // finishing, say); then find the file by its path.
+      const at =
+        current[index]?.path === target.path
+          ? index
+          : current.findIndex((f) => f.path === target.path);
+      return at === -1 ? current : current.filter((_, i) => i !== at);
+    });
   }
 
   // Persist a student's phone to the evergreen `registration_students`
@@ -1681,6 +1810,13 @@ export default function RegistrationPage() {
 
   async function handleSaveAll() {
     setSaving(true);
+    // This save carries every edit made so far. Anything typed while it
+    // is on its way marks the form edited again (see `finally`).
+    unsavedEditsRef.current = false;
+    let saveFailed = false;
+    // Temporary ids of the new contact cards this save creates, in the
+    // order they are sent.
+    const createdContactIds: number[] = [];
     try {
       const promises: Promise<unknown>[] = [];
 
@@ -1704,9 +1840,12 @@ export default function RegistrationPage() {
         );
       }
 
-      // 2. Emergency contacts: POST new, PATCH existing
+      // 2. Emergency contacts: POST new, PATCH existing. A new card with
+      //    nothing typed into it is skipped: it is not a contact yet.
       for (const ec of emergencyContacts) {
+        if (isBlankNewContact(ec)) continue;
         if (ec._isNew) {
+          createdContactIds.push(ec.id);
           promises.push(
             fetch("/api/emergency-contacts", {
               method: "POST",
@@ -1825,8 +1964,15 @@ export default function RegistrationPage() {
       // by index of contacts the server has that we don't recognize
       // locally. Already-persisted contacts (real id, in our local
       // map) keep their typed-but-not-yet-saved values intact.
-      const ecRes = await fetch("/api/emergency-contacts");
-      if (ecRes.ok) {
+      //
+      // Only the cards this save actually created are matched (an empty
+      // new card was not sent, so it has no row to take), and the list
+      // is only fetched when there is one to match.
+      const ecRes =
+        createdContactIds.length > 0
+          ? await fetch("/api/emergency-contacts")
+          : null;
+      if (ecRes?.ok) {
         const serverContacts: EmergencyContact[] = await ecRes.json();
         setEmergencyContacts((prev) => {
           const persistedLocalIds = new Set(
@@ -1835,21 +1981,29 @@ export default function RegistrationPage() {
           const newlyPersisted = serverContacts.filter(
             (sc) => !persistedLocalIds.has(sc.id)
           );
-          let nextIdx = 0;
           return prev.map((c) => {
             if (!c._isNew) return c;
-            const match = newlyPersisted[nextIdx];
-            nextIdx += 1;
+            const sentIdx = createdContactIds.indexOf(c.id);
+            if (sentIdx === -1) return c;
+            const match = newlyPersisted[sentIdx];
             return match ? { ...c, id: match.id, _isNew: false } : c;
           });
         });
       }
     } catch (err) {
+      saveFailed = true;
       console.error("Failed to save registration:", err);
       toast.error("Failed to save registration. Please try again.");
       throw err;
     } finally {
       setSaving(false);
+      // Edits made while this save was on its way are not in it: restart
+      // the autosave timer for them. A save that failed leaves what it
+      // carried unsaved as well; the next edit, or "Complete
+      // Registration", sends it again.
+      const editedMeanwhile = unsavedEditsRef.current;
+      if (saveFailed) unsavedEditsRef.current = true;
+      if (editedMeanwhile) setEditCount((n) => n + 1);
     }
   }
 
@@ -1892,6 +2046,9 @@ export default function RegistrationPage() {
       toast.error(
         `Please complete every required field in each ${blocker} card before continuing.`
       );
+      // The button sits at the bottom of a long form; take the parent to
+      // the first thing that needs fixing (effect below).
+      setValidationJump((n) => n + 1);
       throw new Error("Validation failed");
     }
     // Fire the bool flip and the full-save in parallel. `setRegSection`
@@ -1931,40 +2088,75 @@ export default function RegistrationPage() {
   }, [setPageTitle, registerSaveHandler, unregisterSaveHandler]);
 
 
-  // Auto-save on changes (debounced, snapshot-based)
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savedSnapshotRef = useRef<string>("");
+  // Auto-save two seconds after the parent's last edit (debounced). It
+  // runs off `editCount`, which only `markEdited` moves, so opening the
+  // page, a packet arriving, or a new contact getting its real id never
+  // starts a save.
   const savingRef = useRef(false);
   savingRef.current = saving;
 
-  const currentSnapshot = JSON.stringify({ parents, emergencyContacts, registrations });
-
-  // Capture initial snapshot once data loads
   useEffect(() => {
-    if (!loading && savedSnapshotRef.current === "") {
-      savedSnapshotRef.current = currentSnapshot;
-    }
-  }, [loading, currentSnapshot]);
-
-  useEffect(() => {
-    // Don't auto-save if no baseline yet, or if currently saving
-    if (savedSnapshotRef.current === "" || savingRef.current) return;
-    // Don't save if nothing changed
-    if (currentSnapshot === savedSnapshotRef.current) return;
-
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(async () => {
-      await handleSaveAllRef.current();
-      savedSnapshotRef.current = JSON.stringify({
-        parents,
-        emergencyContacts,
-        registrations,
-      });
+    if (editCount === 0) return;
+    const timer = setTimeout(() => {
+      // Nothing left to send: "Complete Registration" saved it meanwhile.
+      if (!unsavedEditsRef.current) return;
+      // A save is still on its way. When it ends it restarts this timer
+      // if anything was edited in the meantime (see handleSaveAll).
+      if (savingRef.current) return;
+      // handleSaveAll reports its own failures (toast + status pill).
+      handleSaveAllRef.current().catch(() => {});
     }, 2000);
+    return () => clearTimeout(timer);
+  }, [editCount]);
+
+  // Leaving the page inside those two seconds used to drop the edit: the
+  // timer above is cleared on the way out and nothing else sent it. So an
+  // edit still waiting when the page closes is saved then, the same as
+  // on the Students and Financial Aid steps. `handleSaveAllRef` always
+  // holds the latest render's save, so it sends what was last typed.
+  useEffect(() => {
     return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      // Reading the refs at unmount is the point: what matters is
+      // whether an edit is waiting NOW, not when the page mounted.
+      if (!unsavedEditsRef.current) return;
+      handleSaveAllRef.current().catch(() => {});
     };
-  }, [currentSnapshot]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
+
+  // After a refused "Complete Registration": scroll the first missing
+  // field into view and put the cursor in it. Runs after the render that
+  // turned the red borders on.
+  useEffect(() => {
+    if (validationJump === 0) return;
+    const root = pageRef.current;
+    if (!root) return;
+    // Everything this page marks as missing carries the same red border
+    // (inputs, selects, upload boxes, the signature boxes), so the first
+    // one in page order is the first thing to fix. A card can also be
+    // incomplete with nothing red in it (a guardian with no name on
+    // file, say); then go to the card itself.
+    const field = root.querySelector<HTMLElement>(".border-red-400");
+    const target =
+      field ?? root.querySelector<HTMLElement>("[data-incomplete]");
+    if (!target) return;
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+    target.scrollIntoView({
+      behavior: reduceMotion ? "instant" : "smooth",
+      block: "center",
+    });
+    if (!field) return;
+    // The red border is on the control itself, except for a signature
+    // box, where it is on the frame around the "Sign" button.
+    const focusable =
+      'input:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex="0"]';
+    const control = field.matches(focusable)
+      ? field
+      : field.querySelector<HTMLElement>(focusable);
+    // The scroll above already places it; don't let focus jump the page.
+    control?.focus({ preventScroll: true });
+  }, [validationJump]);
 
   // ---------------------------------------------------------------------------
   // Loading skeleton
@@ -1987,6 +2179,20 @@ export default function RegistrationPage() {
   // Lock state is the bridge row's bool — single source of truth, so the
   // sidenav + this button always agree and the state survives reloads.
   const registrationLocked = regProgress?.isRegistration === true;
+  // A completed section is locked. The step layout dims it and blocks the
+  // mouse (`pointer-events-none` on the wrapper around this page), which
+  // left every field reachable, and editable, from the keyboard. The two
+  // halves of the form are therefore wrapped in a <fieldset> that is
+  // disabled while locked: that switches off every input, select and
+  // button inside it for keyboard and mouse alike, and leaves links
+  // alone. The links that should keep working (uploaded documents, signed
+  // PDFs) opt back in to the mouse with `pointer-events-auto`.
+  // `min-w-0` undoes a fieldset's built-in minimum width. The opacity
+  // reset keeps disabled fields from being dimmed twice — the layout
+  // already dims the whole section.
+  const lockableFieldsetClass = registrationLocked
+    ? "min-w-0 [&_:disabled]:opacity-100!"
+    : "min-w-0";
 
   useEffect(() => {
     if (loading || !studentsData || !applicationsData) return;
@@ -2082,7 +2288,10 @@ export default function RegistrationPage() {
 
   return (
     <>
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+      <div
+        ref={pageRef}
+        className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl"
+      >
         {/* Page header */}
         <div>
           <div className="flex items-center justify-between gap-3 pb-3 border-b">
@@ -2106,14 +2315,21 @@ export default function RegistrationPage() {
         {/* SECTION 1: Family & Emergency Contacts                            */}
         {/* ================================================================= */}
 
-        <div>
+        {/* Disabled while the section is locked: see `lockableFieldsetClass`. */}
+        <fieldset disabled={registrationLocked} className={lockableFieldsetClass}>
           <h2 className="text-lg font-semibold mb-4">Current Primary and Secondary Contacts</h2>
 
           <div className="space-y-4">
             {/* Parent / Guardian Cards */}
             {parents.map((parent) => {
               return (
-                <Card key={parent.id} className="overflow-hidden gap-0 py-0 ring-0 border">
+                <Card
+                  key={parent.id}
+                  className="overflow-hidden gap-0 py-0 ring-0 border"
+                  // Where a refused "Complete Registration" scrolls to
+                  // when the card is incomplete but shows no red field.
+                  data-incomplete={isParentComplete(parent) ? undefined : ""}
+                >
                   <CardHeader className="border-b py-3 !pb-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -2280,7 +2496,11 @@ export default function RegistrationPage() {
             {/* Emergency Contact Cards */}
             {emergencyContacts.map((ec) => {
               return (
-                <Card key={ec.id} className="overflow-hidden gap-0 py-0 ring-0 border">
+                <Card
+                  key={ec.id}
+                  className="overflow-hidden gap-0 py-0 ring-0 border"
+                  data-incomplete={isEmergencyContactComplete(ec) ? undefined : ""}
+                >
                   <CardHeader className="border-b py-3 !pb-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -2471,14 +2691,14 @@ export default function RegistrationPage() {
               Add Emergency Contact
             </Button>
           </div>
-        </div>
+        </fieldset>
 
         {/* ================================================================= */}
         {/* SECTION 2: Student Registration Cards                             */}
         {/* ================================================================= */}
 
         {enrolledStudents.length > 0 && (
-          <div>
+          <fieldset disabled={registrationLocked} className={lockableFieldsetClass}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Student Registration</h2>
               {enrolledStudents.some((s) => !selectedStudentIds.has(s.id)) && (
@@ -2506,7 +2726,11 @@ export default function RegistrationPage() {
                 const reg = registrations[student.id] ?? emptyRegistration(student.id, yearId, registrationTypeId);
 
                 return (
-                  <Card key={student.id} className="overflow-hidden gap-0 py-0 ring-0 border">
+                  <Card
+                    key={student.id}
+                    className="overflow-hidden gap-0 py-0 ring-0 border"
+                    data-incomplete={isRegistrationComplete(reg, student) ? undefined : ""}
+                  >
                     <CardHeader className="border-b py-3 !pb-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -2590,7 +2814,7 @@ export default function RegistrationPage() {
                                   <OptionSelect
                                     options={toOptions(SIZES)}
                                     value={reg.shirt_size || ""}
-                                    onChange={(v) => updateRegistration(student.id, "shirt_size", v)}
+                                    onChange={(v) => editRegistration(student.id, "shirt_size", v)}
                                     placeholder="Select size"
                                     invalid={showValidation && !reg.shirt_size}
                                   />
@@ -2600,7 +2824,7 @@ export default function RegistrationPage() {
                                   <OptionSelect
                                     options={toOptions(SIZES)}
                                     value={reg.pant_size || ""}
-                                    onChange={(v) => updateRegistration(student.id, "pant_size", v)}
+                                    onChange={(v) => editRegistration(student.id, "pant_size", v)}
                                     placeholder="Select size"
                                     invalid={showValidation && !reg.pant_size}
                                   />
@@ -2610,7 +2834,7 @@ export default function RegistrationPage() {
                                   <OptionSelect
                                     options={toOptions(SWIM_LEVELS)}
                                     value={reg.swim_level || ""}
-                                    onChange={(v) => updateRegistration(student.id, "swim_level", v)}
+                                    onChange={(v) => editRegistration(student.id, "swim_level", v)}
                                     placeholder="Select level"
                                     invalid={showValidation && !reg.swim_level}
                                   />
@@ -2644,6 +2868,7 @@ export default function RegistrationPage() {
                                         onUploaded={(meta) => handleStudentDocUpload(student.id, key, meta)}
                                         onRemoved={(idx) => handleStudentDocRemove(student.id, key, idx)}
                                         invalid={showValidation && !hasAnyStudentDoc(student, key)}
+                                        locked={registrationLocked}
                                       />
                                     </Field>
                                   );
@@ -2670,6 +2895,7 @@ export default function RegistrationPage() {
                                         files={currentFiles}
                                         onUploaded={(meta) => handleStudentDocUpload(student.id, key, meta)}
                                         onRemoved={(idx) => handleStudentDocRemove(student.id, key, idx)}
+                                        locked={registrationLocked}
                                       />
                                     </Field>
                                   );
@@ -2686,7 +2912,7 @@ export default function RegistrationPage() {
                                     <Textarea
                                       placeholder="Describe IEP if applicable..."
                                       value={reg.iep_description || ""}
-                                      onChange={(e) => updateRegistration(student.id, "iep_description", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "iep_description", e.target.value)}
                                       rows={2}
                                     />
                                   </Field>
@@ -2708,7 +2934,7 @@ export default function RegistrationPage() {
                                     <Textarea
                                       placeholder="List any allergies..."
                                       value={reg.allergies || ""}
-                                      onChange={(e) => updateRegistration(student.id, "allergies", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "allergies", e.target.value)}
                                       className={showValidation && !reg.allergies ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
@@ -2720,7 +2946,7 @@ export default function RegistrationPage() {
                                     <Textarea
                                       placeholder="List any dietary restrictions..."
                                       value={reg.dietary_restrictions || ""}
-                                      onChange={(e) => updateRegistration(student.id, "dietary_restrictions", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "dietary_restrictions", e.target.value)}
                                       className={showValidation && !reg.dietary_restrictions ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
@@ -2730,7 +2956,7 @@ export default function RegistrationPage() {
                                     <Textarea
                                       placeholder="List any prescription medications..."
                                       value={reg.prescription_medications || ""}
-                                      onChange={(e) => updateRegistration(student.id, "prescription_medications", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "prescription_medications", e.target.value)}
                                       className={showValidation && !reg.prescription_medications ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
@@ -2742,7 +2968,7 @@ export default function RegistrationPage() {
                                     <Textarea
                                       placeholder="Describe any health conditions..."
                                       value={reg.health_conditions || ""}
-                                      onChange={(e) => updateRegistration(student.id, "health_conditions", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "health_conditions", e.target.value)}
                                       className={showValidation && !reg.health_conditions ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
@@ -2752,7 +2978,7 @@ export default function RegistrationPage() {
                                     <Textarea
                                       placeholder="Any additional health information..."
                                       value={reg.additional_health_information || ""}
-                                      onChange={(e) => updateRegistration(student.id, "additional_health_information", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "additional_health_information", e.target.value)}
                                       rows={2}
                                     />
                                   </Field>
@@ -2763,7 +2989,7 @@ export default function RegistrationPage() {
                                     <Input
                                       placeholder="Describe any vision impairments..."
                                       value={reg.vision_impairments || ""}
-                                      onChange={(e) => updateRegistration(student.id, "vision_impairments", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "vision_impairments", e.target.value)}
                                       className={showValidation && !reg.vision_impairments ? "border-2 border-red-400" : ""}
                                     />
                                   </Field>
@@ -2772,7 +2998,7 @@ export default function RegistrationPage() {
                                     <Input
                                       placeholder="Describe any hearing impairments..."
                                       value={reg.hearing_impairments || ""}
-                                      onChange={(e) => updateRegistration(student.id, "hearing_impairments", e.target.value)}
+                                      onChange={(e) => editRegistration(student.id, "hearing_impairments", e.target.value)}
                                       className={showValidation && !reg.hearing_impairments ? "border-2 border-red-400" : ""}
                                     />
                                   </Field>
@@ -2784,7 +3010,7 @@ export default function RegistrationPage() {
                                     <OptionSelect
                                       options={toOptions(YES_NO)}
                                       value={reg.permission_for_acetaminophen || ""}
-                                      onChange={(v) => updateRegistration(student.id, "permission_for_acetaminophen", v)}
+                                      onChange={(v) => editRegistration(student.id, "permission_for_acetaminophen", v)}
                                       placeholder="Select"
                                       invalid={showValidation && !reg.permission_for_acetaminophen}
                                     />
@@ -2794,7 +3020,7 @@ export default function RegistrationPage() {
                                     <OptionSelect
                                       options={toOptions(YES_NO_MAYBE)}
                                       value={reg.interested_in_counseling_services || ""}
-                                      onChange={(v) => updateRegistration(student.id, "interested_in_counseling_services", v)}
+                                      onChange={(v) => editRegistration(student.id, "interested_in_counseling_services", v)}
                                       placeholder="Select"
                                       invalid={showValidation && !reg.interested_in_counseling_services}
                                     />
@@ -2814,7 +3040,7 @@ export default function RegistrationPage() {
                                 <input
                                   type="checkbox"
                                   checked={reg.carry_epi_pen || false}
-                                  onChange={(e) => updateRegistration(student.id, "carry_epi_pen", e.target.checked)}
+                                  onChange={(e) => editRegistration(student.id, "carry_epi_pen", e.target.checked)}
                                   className="size-5 cursor-pointer rounded accent-primary"
                                 />
                                 <span className="text-sm select-none">Yes, my child carries an EpiPen</span>
@@ -2834,7 +3060,7 @@ export default function RegistrationPage() {
                                         <Textarea
                                           placeholder="Describe the allergy, when to administer, and any other relevant details..."
                                           value={reg.epipen_explainer || ""}
-                                          onChange={(e) => updateRegistration(student.id, "epipen_explainer", e.target.value)}
+                                          onChange={(e) => editRegistration(student.id, "epipen_explainer", e.target.value)}
                                           className={showValidation && reg.carry_epi_pen && !reg.epipen_explainer ? "border-2 border-red-400" : ""}
                                           rows={3}
                                         />
@@ -2856,7 +3082,7 @@ export default function RegistrationPage() {
                                 <input
                                   type="checkbox"
                                   checked={reg.is_student_on_medicaid || false}
-                                  onChange={(e) => updateRegistration(student.id, "is_student_on_medicaid", e.target.checked)}
+                                  onChange={(e) => editRegistration(student.id, "is_student_on_medicaid", e.target.checked)}
                                   className="size-5 cursor-pointer rounded accent-primary"
                                 />
                                 <span className="text-sm select-none">Is your student currently on Medicaid?</span>
@@ -2876,7 +3102,7 @@ export default function RegistrationPage() {
                                         <Input
                                           placeholder="Medicaid number"
                                           value={reg.medicaid_number || ""}
-                                          onChange={(e) => updateRegistration(student.id, "medicaid_number", e.target.value)}
+                                          onChange={(e) => editRegistration(student.id, "medicaid_number", e.target.value)}
                                         />
                                       </Field>
                                       <Field>
@@ -2884,7 +3110,7 @@ export default function RegistrationPage() {
                                         <OptionSelect
                                           options={toOptions(MEDICAID_PROVIDERS)}
                                           value={reg.medicaid_provider || ""}
-                                          onChange={(v) => updateRegistration(student.id, "medicaid_provider", v)}
+                                          onChange={(v) => editRegistration(student.id, "medicaid_provider", v)}
                                           placeholder="Select plan"
                                         />
                                       </Field>
@@ -2907,7 +3133,7 @@ export default function RegistrationPage() {
                                   <Textarea
                                     placeholder="List names and relationships of approved adults..."
                                     value={reg.other_adults_approved_for_pickup || ""}
-                                    onChange={(e) => updateRegistration(student.id, "other_adults_approved_for_pickup", e.target.value)}
+                                    onChange={(e) => editRegistration(student.id, "other_adults_approved_for_pickup", e.target.value)}
                                     className={showValidation && !reg.other_adults_approved_for_pickup ? "border-2 border-red-400" : ""}
                                     rows={3}
                                   />
@@ -2917,7 +3143,7 @@ export default function RegistrationPage() {
                                   <Textarea
                                     placeholder="List any adults prohibited from picking up the student..."
                                     value={reg.prohibited_adults || ""}
-                                    onChange={(e) => updateRegistration(student.id, "prohibited_adults", e.target.value)}
+                                    onChange={(e) => editRegistration(student.id, "prohibited_adults", e.target.value)}
                                     className={showValidation && !reg.prohibited_adults ? "border-2 border-red-400" : ""}
                                     rows={3}
                                   />
@@ -2936,7 +3162,7 @@ export default function RegistrationPage() {
                                 <input
                                   type="checkbox"
                                   checked={reg.transferring_from_pinellas_public || false}
-                                  onChange={(e) => updateRegistration(student.id, "transferring_from_pinellas_public", e.target.checked)}
+                                  onChange={(e) => editRegistration(student.id, "transferring_from_pinellas_public", e.target.checked)}
                                   className="size-5 cursor-pointer rounded accent-primary"
                                 />
                                 <span className="text-sm select-none">Yes, my student is transferring from a Pinellas County public school</span>
@@ -2981,13 +3207,21 @@ export default function RegistrationPage() {
                                                 </div>
                                               </div>
                                               {downloadUrl && (
+                                                // A link rather than a button, so it
+                                                // keeps working once the section is
+                                                // completed and every button in it is
+                                                // switched off. `pointer-events-auto`
+                                                // lets the mouse through the layout's
+                                                // lock as well.
                                                 <Button
+                                                  asChild
                                                   variant="outline"
                                                   size="sm"
-                                                  className="shrink-0 bg-white"
-                                                  onClick={() => window.open(downloadUrl, "_blank")}
+                                                  className="shrink-0 bg-white pointer-events-auto"
                                                 >
-                                                  Download PDF
+                                                  <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                                                    Download PDF
+                                                  </a>
                                                 </Button>
                                               )}
                                             </div>
@@ -3067,13 +3301,17 @@ export default function RegistrationPage() {
                                           </div>
                                         </div>
                                         {downloadUrl && (
+                                          // A link, not a button: see the
+                                          // withdrawal form's download above.
                                           <Button
+                                            asChild
                                             variant="outline"
                                             size="sm"
-                                            className="shrink-0 bg-white"
-                                            onClick={() => window.open(downloadUrl, "_blank")}
+                                            className="shrink-0 bg-white pointer-events-auto"
                                           >
-                                            Download PDF
+                                            <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                                              Download PDF
+                                            </a>
                                           </Button>
                                         )}
                                       </div>
@@ -3124,7 +3362,7 @@ export default function RegistrationPage() {
                 );
               })}
             </div>
-          </div>
+          </fieldset>
         )}
       </div>
 
