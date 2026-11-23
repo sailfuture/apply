@@ -7497,8 +7497,14 @@ function DecisionStudentRow({
               {/* Currency input — leading "$" sigil on the left
                   matches every other money input on the page so
                   admins see this field as a dollar value at a
-                  glance. */}
-              <div className="relative">
+                  glance.
+
+                  The "Use $X" button sits on the same row as the input
+                  it fills, not under the note: it is offered while the
+                  field is empty, or holds more than tuition after Step
+                  Up, and puts that figure in. */}
+              <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
                   $
                 </span>
@@ -7546,59 +7552,47 @@ function DecisionStudentRow({
                   className="border-input pl-7 tabular-nums"
                 />
               </div>
+                {afterStepUp != null &&
+                !amountsReadOnly &&
+                (remainingOverCeiling || typedRemaining == null) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="shrink-0 bg-white tabular-nums"
+                    disabled={savingField !== null}
+                    onClick={fillAfterStepUpAmount}
+                  >
+                    Use ${formatCurrency2(afterStepUp)}
+                  </Button>
+                ) : null}
+              </div>
               {/* What the field means, with this student's own numbers.
                   It is the family's share AFTER the Step Up award, and
                   it reads as if the award were still to come off: twice
                   the tuition figure was typed here on that reading. */}
               {remainingOverCeiling && afterStepUp != null ? (
-                <div className="space-y-2">
-                  <p className="text-[11px] text-red-700" role="alert">
-                    That is more than tuition after the Step Up award: $
-                    {formatCurrency2(ceilingTuition ?? 0)} tuition − $
-                    {formatCurrency2(ceilingSufs)} Step Up = $
-                    {formatCurrency2(afterStepUp)}. The award comes off before
-                    the family&rsquo;s share, so this field takes $
-                    {formatCurrency2(afterStepUp)} or less. Not saved.
-                  </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="bg-white"
-                    disabled={amountsReadOnly || savingField !== null}
-                    onClick={fillAfterStepUpAmount}
-                  >
-                    Use ${formatCurrency2(afterStepUp)}
-                  </Button>
-                </div>
+                <p className="text-[11px] text-red-700" role="alert">
+                  That is more than tuition after the Step Up award: $
+                  {formatCurrency2(ceilingTuition ?? 0)} tuition − $
+                  {formatCurrency2(ceilingSufs)} Step Up = $
+                  {formatCurrency2(afterStepUp)}. The award comes off before
+                  the family&rsquo;s share, so this field takes $
+                  {formatCurrency2(afterStepUp)} or less. Not saved.
+                </p>
               ) : afterStepUp != null ? (
-                <div className="space-y-2">
-                  <p className="text-[11px] text-muted-foreground">
-                    What the family pays for tuition after the Step Up award
-                    and any Opportunity Scholarship. Tuition after Step Up is
-                    ${formatCurrency2(afterStepUp)} ($
-                    {formatCurrency2(ceilingTuition ?? 0)} − $
-                    {formatCurrency2(ceilingSufs)}): enter that for no
-                    Opportunity Scholarship, or less to award one.
-                    {impliedOpportunityAward != null
-                      ? impliedOpportunityAward > 0
-                        ? ` This amount makes the Opportunity Scholarship $${formatCurrency2(impliedOpportunityAward)}.`
-                        : " This amount is no Opportunity Scholarship."
-                      : ""}
-                  </p>
-                  {typedRemaining == null && !amountsReadOnly ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="bg-white"
-                      disabled={savingField !== null}
-                      onClick={fillAfterStepUpAmount}
-                    >
-                      Use ${formatCurrency2(afterStepUp)}
-                    </Button>
-                  ) : null}
-                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  What the family pays for tuition after the Step Up award
+                  and any Opportunity Scholarship. Tuition after Step Up is
+                  ${formatCurrency2(afterStepUp)} ($
+                  {formatCurrency2(ceilingTuition ?? 0)} − $
+                  {formatCurrency2(ceilingSufs)}): enter that for no
+                  Opportunity Scholarship, or less to award one.
+                  {impliedOpportunityAward != null
+                    ? impliedOpportunityAward > 0
+                      ? ` This amount makes the Opportunity Scholarship $${formatCurrency2(impliedOpportunityAward)}.`
+                      : " This amount is no Opportunity Scholarship."
+                    : ""}
+                </p>
               ) : (
                 <p className="text-[11px] text-muted-foreground">
                   What the family pays for tuition after the Step Up award

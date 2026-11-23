@@ -110,12 +110,16 @@ export async function DELETE(
     // ── 1. Stripe gate (blocking) ────────────────────────────────────
     // Throws on transport failure → 500 with nothing deleted.
     const paymentRows = await xano.familyPayments.getAllByFamily(familyId);
-    const stripe = getStripeClient();
     for (const row of paymentRows) {
       const subId = activeStripeSubscriptionId(row.stripe_subscription_id);
       if (!subId) continue;
       try {
-        await stripe.subscriptions.cancel(subId);
+        // The Stripe client is made here, not above the loop: a family
+        // that was never billed has nothing to cancel and shouldn't
+        // need Stripe to be reachable (or configured) to be deleted.
+        // For one that was, a client that can't be made lands in the
+        // catch below and refuses the delete like any failed cancel.
+        await getStripeClient().subscriptions.cancel(subId);
       } catch (err) {
         // A subscription that's already gone or already canceled is
         // the state we want — only a live-but-uncancelable one blocks.
@@ -150,14 +154,31 @@ export async function DELETE(
     ).forEach(failed("delete application"));
 
     for (const student of students) {
-      const packetIds = Array.isArray(student.registration_student_registration_id)
+      // The student row's own list of packet ids, PLUS every packet
+      // that names this student. The list alone is not reliable: it
+      // can hold the id of a packet that no longer exists and miss the
+      // one that does (seen 2026-11-22: the listed id answered 404 and
+      // the student's real packet was left behind, pointing at a
+      // student that had just been deleted).
+      const listedIds = Array.isArray(student.registration_student_registration_id)
         ? student.registration_student_registration_id.filter(
             (p): p is number => typeof p === "number"
           )
         : [];
+      const namingIds = (
+        await xano.studentRegistration.getAllByStudentId(student.id)
+      ).map((p) => p.id);
+      const packetIds = Array.from(new Set([...listedIds, ...namingIds]));
       (
         await Promise.allSettled(
-          packetIds.map((pid) => xano.studentRegistration.delete(pid))
+          packetIds.map((pid) =>
+            xano.studentRegistration.delete(pid).catch((err: unknown) => {
+              // Already gone is the state we want (a stale id on the
+              // student's list), not something to warn about.
+              if (err instanceof Error && /\b404\b/.test(err.message)) return;
+              throw err;
+            })
+          )
         )
       ).forEach(failed(`delete packet for student #${student.id}`));
 
