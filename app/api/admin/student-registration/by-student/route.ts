@@ -19,6 +19,7 @@ import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
 import {
   FULL_YEAR_PAYMENTS,
   paymentsFrom,
+  proratedTuition,
   resolvedPaymentCount,
   storedPaymentCount,
   tuitionMonthsOf,
@@ -222,7 +223,7 @@ export async function POST(req: NextRequest) {
     // `remaining_opportunity_amount` column. When the caller doesn't
     // override, fall back to the stored value so partial updates
     // don't blow away the persisted input.
-    const remainingOpportunityAmount =
+    let remainingOpportunityAmount =
       remainingInput === undefined
         ? app.remaining_opportunity_amount ?? 0
         : (remainingInput ?? 0);
@@ -311,6 +312,53 @@ export async function POST(req: NextRequest) {
         storedCount ?? tuitionMonths,
         tuitionMonths,
         openCount
+      );
+    }
+
+    // ─── The family's amount is what is left AFTER the Step Up award ───
+    // "Remaining Amount Family Pays" is typed, and nothing subtracts the
+    // Step Up award from it: it is the family's share of tuition once
+    // Step Up and any Opportunity Scholarship have come off. So the most
+    // it can be is tuition minus Step Up (a student with no Opportunity
+    // Scholarship). A larger figure charges the family the Step Up award
+    // on top: the receipt then lists the award and a remaining amount
+    // that ignores it. That is easy to do by typing the tuition figure
+    // and expecting the award to come off, so it is refused here, with
+    // the number to enter.
+    const tuitionForYear = proratedTuition(yearTuition, tuitionMonths);
+    const afterStepUp = Math.max(roundCents(tuitionForYear - sufsAwardAmount), 0);
+    const afterStepUpBefore = Math.max(
+      roundCents(beforeTuition - before.sufsAmount),
+      0
+    );
+    // A student with NO Opportunity Scholarship pays exactly tuition
+    // minus Step Up. When this save moves either of those (a start
+    // month, a corrected award) and doesn't set the family's amount
+    // itself, that amount follows, so the student still has no
+    // Opportunity Scholarship. A student who has one keeps the amount
+    // that was agreed for them.
+    const hadNoOpportunityScholarship =
+      before.hasSavedDetermination &&
+      typeof app.remaining_opportunity_amount === "number" &&
+      Math.abs(app.remaining_opportunity_amount - afterStepUpBefore) <= 0.01;
+    if (
+      remainingInput === undefined &&
+      hadNoOpportunityScholarship &&
+      Math.abs(afterStepUp - afterStepUpBefore) > 0.005
+    ) {
+      remainingOpportunityAmount = afterStepUp;
+    }
+    if (remainingOpportunityAmount > afterStepUp + 0.005) {
+      return NextResponse.json(
+        {
+          error:
+            `The family's amount (${usd(remainingOpportunityAmount)}) is more than tuition after the Step Up award: ` +
+            `${usd(tuitionForYear)} tuition − ${usd(sufsAwardAmount)} Step Up = ${usd(afterStepUp)}. ` +
+            `The award comes off before the family's share, so enter ${usd(afterStepUp)} or less ` +
+            `(${usd(afterStepUp)} means no Opportunity Scholarship).`,
+          maxRemaining: afterStepUp,
+        },
+        { status: 400 }
       );
     }
 
@@ -619,6 +667,12 @@ function usd(value: number): string {
     style: "currency",
     currency: "USD",
   });
+}
+
+/** To the cent, so a subtraction of two money figures can't leave a
+ *  float tail (16054.5 − 5016 is exact; 27522 × 7/12 is not). */
+function roundCents(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 /**

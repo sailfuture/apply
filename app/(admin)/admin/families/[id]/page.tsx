@@ -88,6 +88,7 @@ import {
   paymentCountLabel,
   planRangeLabel,
   planSummaryLabel,
+  proratedTuition,
   resolvedPaymentCount,
   startMonthOptions,
   storedPaymentCount,
@@ -1320,7 +1321,7 @@ function FamilyDetailNav({
 
   return (
     <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-      <div className="overflow-hidden rounded-lg border">
+      <div className="overflow-hidden rounded-frame-inner border">
         <div className="divide-y">
           {/* Back-to-Applications row, styled like the parent app's
               "Dashboard" back button — circular icon + muted label. */}
@@ -6886,6 +6887,51 @@ function DecisionStudentRow({
   // Payments the saved amount is spread over (12 on a row saved before
   // payment plans existed).
   const shownPaymentCount = savedPlanCount ?? FULL_YEAR_PAYMENTS;
+
+  // ─── Tuition after the Step Up award ─── "Remaining Amount Family
+  // Pays" is the family's share once Step Up and any Opportunity
+  // Scholarship have come off; nothing subtracts the award from what is
+  // typed. The most it can be is tuition minus Step Up (no Opportunity
+  // Scholarship). Typing the tuition figure and expecting the award to
+  // come off charges the family the award on top, so the card shows the
+  // sum, offers the figure in one click, and won't save a larger one
+  // (the server refuses it too). Known once a determination is saved:
+  // before that the start month, and so the tuition, isn't settled.
+  const ceilingTuition =
+    overriding && stagedStartMonths != null
+      ? proratedTuition(schoolYear?.tuition ?? 0, stagedStartMonths)
+      : typeof app?.tuition_total === "number" && app.tuition_total > 0
+        ? app.tuition_total
+        : null;
+  const ceilingSufs =
+    overriding && stagedSufs != null ? stagedSufs : (app?.sufs_amount ?? 0);
+  const afterStepUp =
+    ceilingTuition == null
+      ? null
+      : Math.max(Math.round((ceilingTuition - ceilingSufs) * 100) / 100, 0);
+  const typedRemaining = stagedAmount(draft.opportunity_scholarship_award_amount);
+  const remainingOverCeiling =
+    afterStepUp != null &&
+    typedRemaining != null &&
+    typedRemaining > afterStepUp + 0.005;
+  // What the typed amount leaves for the school's own award.
+  const impliedOpportunityAward =
+    afterStepUp != null && typedRemaining != null && !remainingOverCeiling
+      ? Math.round((afterStepUp - typedRemaining) * 100) / 100
+      : null;
+
+  /** Put "tuition after Step Up" in the field: saved straight away, or
+   *  staged with the other amounts while overriding. */
+  function fillAfterStepUpAmount() {
+    if (afterStepUp == null) return;
+    setDraft((d) => ({
+      ...d,
+      opportunity_scholarship_award_amount: String(afterStepUp),
+    }));
+    if (overriding) return;
+    if (afterStepUp === app?.remaining_opportunity_amount) return;
+    void patchPerStudentBilling({ remainingOpportunityAmount: afterStepUp });
+  }
   // Typed something the override can't use (negative, not a number).
   // Said out loud, because otherwise Review just sits there disabled.
   const stagedInvalid =
@@ -6895,6 +6941,9 @@ function DecisionStudentRow({
       (sufsType !== "" &&
         draft.sufs_amount_input !== "" &&
         stagedSufs == null));
+  // A staged family amount above tuition after Step Up can't be
+  // reviewed either; the note under the field says what to enter.
+  const stagedOverCeiling = overriding && remainingOverCeiling;
 
   function cancelOverride() {
     // Put the inputs back on the saved values — a staged number left
@@ -7477,6 +7526,9 @@ function DecisionStudentRow({
                     if (raw === "" || raw == null) return;
                     const next = Number(raw);
                     if (!Number.isFinite(next)) return;
+                    // More than tuition after Step Up: not saved. The
+                    // note under the field says why and what to enter.
+                    if (remainingOverCeiling) return;
                     // No-op when the value hasn't changed. Compare
                     // against the row's persisted
                     // `remaining_opportunity_amount` — the column
@@ -7490,9 +7542,70 @@ function DecisionStudentRow({
                       remainingOpportunityAmount: next,
                     });
                   }}
+                  aria-invalid={remainingOverCeiling || undefined}
                   className="border-input pl-7 tabular-nums"
                 />
               </div>
+              {/* What the field means, with this student's own numbers.
+                  It is the family's share AFTER the Step Up award, and
+                  it reads as if the award were still to come off: twice
+                  the tuition figure was typed here on that reading. */}
+              {remainingOverCeiling && afterStepUp != null ? (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-red-700" role="alert">
+                    That is more than tuition after the Step Up award: $
+                    {formatCurrency2(ceilingTuition ?? 0)} tuition − $
+                    {formatCurrency2(ceilingSufs)} Step Up = $
+                    {formatCurrency2(afterStepUp)}. The award comes off before
+                    the family&rsquo;s share, so this field takes $
+                    {formatCurrency2(afterStepUp)} or less. Not saved.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="bg-white"
+                    disabled={amountsReadOnly || savingField !== null}
+                    onClick={fillAfterStepUpAmount}
+                  >
+                    Use ${formatCurrency2(afterStepUp)}
+                  </Button>
+                </div>
+              ) : afterStepUp != null ? (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-muted-foreground">
+                    What the family pays for tuition after the Step Up award
+                    and any Opportunity Scholarship. Tuition after Step Up is
+                    ${formatCurrency2(afterStepUp)} ($
+                    {formatCurrency2(ceilingTuition ?? 0)} − $
+                    {formatCurrency2(ceilingSufs)}): enter that for no
+                    Opportunity Scholarship, or less to award one.
+                    {impliedOpportunityAward != null
+                      ? impliedOpportunityAward > 0
+                        ? ` This amount makes the Opportunity Scholarship $${formatCurrency2(impliedOpportunityAward)}.`
+                        : " This amount is no Opportunity Scholarship."
+                      : ""}
+                  </p>
+                  {typedRemaining == null && !amountsReadOnly ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="bg-white"
+                      disabled={savingField !== null}
+                      onClick={fillAfterStepUpAmount}
+                    >
+                      Use ${formatCurrency2(afterStepUp)}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  What the family pays for tuition after the Step Up award
+                  and any Opportunity Scholarship. The Step Up award is not
+                  subtracted from this figure; it has already come off.
+                </p>
+              )}
             </Field>
           </div>
 
@@ -7577,9 +7690,11 @@ function DecisionStudentRow({
               <span className="text-[11px] text-muted-foreground text-right">
                 {stagedInvalid
                   ? "Enter an amount of $0 or more."
-                  : hasStagedChange
-                    ? "Not saved yet."
-                    : "Change an amount or the first payment month above to review it."}
+                  : stagedOverCeiling
+                    ? "The family's amount is more than tuition after Step Up."
+                    : hasStagedChange
+                      ? "Not saved yet."
+                      : "Change an amount or the enrollment start month above to review it."}
               </span>
               <Button
                 type="button"
@@ -7595,7 +7710,10 @@ function DecisionStudentRow({
                 type="button"
                 size="sm"
                 disabled={
-                  !hasStagedChange || stagedInvalid || overrideBusy !== null
+                  !hasStagedChange ||
+                  stagedInvalid ||
+                  stagedOverCeiling ||
+                  overrideBusy !== null
                 }
                 onClick={() => void reviewOverride()}
                 className="bg-amber-600 hover:bg-amber-700 text-white"

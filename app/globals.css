@@ -205,3 +205,12 @@ select:not(.cl-rootBox *),
     cursor: pointer;
   }
 }
+
+/* The inner panel of a framed table: a `rounded-xl` frame with a 1px
+   border and `p-1.5` of padding around a bordered panel. Nested corners
+   only look right when they share a centre, which means outer radius =
+   inner radius + the gap between them. The panels used `rounded-lg`,
+   about 3px too round for that frame, so the gap bulged at each corner. */
+@utility rounded-frame-inner {
+  border-radius: calc(var(--radius-xl) - 0.375rem - 1px);
+}
