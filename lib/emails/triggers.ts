@@ -334,7 +334,16 @@ async function hasAlreadySentEmail({
   template: string;
 }): Promise<boolean> {
   try {
-    const rows = await xano.emailNotifications.getByFamily(familyId, yearId);
+    // Fresh, not the cached copy: the audit row for a send is written
+    // after that request's response has gone out, where the cache
+    // can't be expired. Reading the cached log, an Undo → Accept (or a
+    // returned registration resubmitted) inside the cache window found
+    // "never sent" and emailed the family twice.
+    const rows = await xano.emailNotifications.getByFamilyStrict(
+      familyId,
+      yearId,
+      { fresh: true }
+    );
     return rows.some(
       (r) => r.template === template && r.status === "sent"
     );
@@ -347,15 +356,31 @@ async function hasAlreadySentEmail({
   }
 }
 
-/** Email 3: parent submitted the registration packet. Fires from
- *  PATCH /api/student-registration-progress when all four section
- *  bools (tuition / enrollment / registration / volunteer hours)
- *  transition to true (matches the existing `submitted_date`
- *  stamping logic). */
+/** Email 3: parent submitted their registration. Fires from PATCH
+ *  /api/student-registration-progress when `isSubmitted` goes
+ *  false → true, i.e. when the parent presses Submit Registration.
+ *
+ *  Once per family and year, on the send log, the same way as the
+ *  acceptance email: `isSubmitted` flips true again when admissions
+ *  returns a registration and the parent resubmits, and a family that
+ *  finished every section before the trigger moved to Submit was
+ *  already sent this. Failed sends don't count, so a retry can still
+ *  go out. */
 export async function sendRegistrationReceivedEmail(
   familyId: number,
   yearId: number
 ): Promise<SendResult> {
+  const alreadySent = await hasAlreadySentEmail({
+    familyId,
+    yearId,
+    template: "registration-received",
+  });
+  if (alreadySent) {
+    console.log(
+      `[email/registration-received] dedupe — family=${familyId} year=${yearId} already received the registration-received email`
+    );
+    return { ok: true, id: "deduped" };
+  }
   const ctx = await resolveFamilyContext(familyId, yearId);
   if (!ctx) return { ok: false, error: "context-failed" };
   return sendEmail({

@@ -150,10 +150,12 @@ export async function PATCH(req: NextRequest) {
 
   const row = await resolveProgress(familyId, yearId);
 
-  // Derive `submitted_date`: once all four section bools are true, stamp
-  // the current time if not already stamped. One-way latch — we don't clear
+  // Derive `submitted_date`: once every section bool is true, stamp the
+  // current time if not already stamped. One-way latch — we don't clear
   // it if a bool later flips back. This keeps the post-enrollment dashboard
-  // sticky across unlock/re-lock cycles.
+  // sticky across unlock/re-lock cycles. (The name is historical: it marks
+  // when the last section was finished. The "registration received"
+  // message below goes out on the Submit press instead.)
   const next = { ...row, ...patch };
   const justSubmitted =
     next.isTuition === true &&
@@ -168,15 +170,27 @@ export async function PATCH(req: NextRequest) {
     patch.submitted_date = Date.now();
   }
 
+  // The parent pressed "Submit Registration": `isSubmitted` goes
+  // false → true on this PATCH. Read before the update, from the row
+  // as it stood.
+  const submittedNow = patch.isSubmitted === true && row.isSubmitted !== true;
+
   const updated = await xano.studentRegistrationProgress.update(row.id, patch);
 
-  // Email 3: parent just completed the registration packet. Fires
-  // on the same one-way latch that stamps `submitted_date` above —
-  // first PATCH that lands all four section bools true wins. Re-
-  // PATCHes after submission are no-ops because `submitted_date` is
-  // already populated, so the guard above is false. Best-effort
-  // send: a failed email doesn't fail the parent's submission.
-  if (justSubmitted) {
+  // Email 3 + its text: "we received your registration". Sent when the
+  // parent SUBMITS, not when the last section is completed. It used to
+  // ride the `submitted_date` latch above, so it went out the moment
+  // the final section flipped — before the parent had pressed Submit,
+  // and to a parent who might never press it.
+  //
+  // `isSubmitted` can go false → true more than once (admissions
+  // returns a registration and the parent submits again), and a family
+  // that finished every section before this change already got the
+  // message. Both triggers therefore send once per family and year:
+  // the email checks the send log (`sendRegistrationReceivedEmail`),
+  // the text has its own prior-send check. Best-effort: a failed send
+  // doesn't fail the parent's submission.
+  if (submittedNow) {
     sendRegistrationReceivedEmail(familyId, yearId).catch((err) => {
       console.error(
         `[/api/student-registration-progress] sendRegistrationReceivedEmail failed for family=${familyId} year=${yearId}:`,

@@ -5141,10 +5141,18 @@ export const xano = {
      *  THROW instead of coming back as `[]`. Dedupe reads must use
      *  this. An empty log means "never sent", so a swallowed error
      *  would re-send a reminder the family already got, on every run
-     *  of an outage. */
+     *  of an outage.
+     *
+     *  `fresh: true` reads past the Data Cache (this table is cached;
+     *  the `cache: "no-store"` below is dropped for cached tables). A
+     *  dedupe that can be asked twice within minutes needs it: the
+     *  audit row is written after the response has gone out, where
+     *  the cache can't be expired, so the cached log still said
+     *  "never sent" and a quick resubmit emailed the family again. */
     async getByFamilyStrict(
       familyId: number,
-      yearId?: number
+      yearId?: number,
+      opts?: { fresh?: boolean }
     ): Promise<XanoEmailNotification[]> {
       const params = new URLSearchParams({
         registration_families_id: String(familyId),
@@ -5154,7 +5162,8 @@ export const xano = {
       }
       const res = await xanoFetch(
         `${getBaseUrl()}/registration_email_notifications?${params.toString()}`,
-        { cache: "no-store" }
+        { cache: "no-store" },
+        opts?.fresh ? { fresh: true } : undefined
       );
       if (!res.ok) {
         throw new Error(
