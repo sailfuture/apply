@@ -28,7 +28,9 @@ export const metadata: Metadata = {
   // notifications at all (Safari tabs never do).
   appleWebApp: {
     capable: true,
-    title: "SFA Admin",
+    // The name iOS offers when the site is added to the home screen.
+    // Parents install it too, so not "SFA Admin" (see app/manifest.ts).
+    title: "SailFuture Academy Portal",
     statusBarStyle: "default",
   },
   icons: {

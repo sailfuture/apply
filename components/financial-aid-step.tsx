@@ -75,6 +75,7 @@ import {
   FileUploadTrigger,
 } from "@/components/ui/file-upload";
 import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
+import { parentContactEmail } from "@/lib/school-contacts";
 
 interface SchoolYear {
   id: number;
@@ -4339,7 +4340,9 @@ export function FinancialAidStep({
               </p>
               <p className="text-sm text-muted-foreground mb-3">
                 Once you&apos;ve confirmed the application, please sign below and we&apos;ll proceed with the final review of your tuition amount. Should you have any questions or concerns, please don&apos;t hesitate to reach out at{" "}
-                <a href="mailto:admissions@sailfuture.org" className="text-primary underline">admissions@sailfuture.org</a>
+                {/* By stage (lib/school-contacts.ts): an enrolled family
+                    adding a student writes to the dean's office. */}
+                <a href={`mailto:${parentContactEmail(!!addition)}`} className="text-primary underline">{parentContactEmail(!!addition)}</a>
                 {" "}or{" "}
                 <a href={`tel:${MAIN_LINE}`} className="text-primary underline">{MAIN_LINE_DISPLAY}</a>
               </p>

@@ -29,6 +29,11 @@ import { toast } from "sonner";
 import confetti from "canvas-confetti";
 import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
 import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
+import {
+  ADMISSIONS_EMAIL,
+  DEAN_EMAIL,
+  HELP_CONTACT,
+} from "@/lib/school-contacts";
 
 /**
  * The step tables below are rows with a click handler, which only a
@@ -285,10 +290,10 @@ function RegistrationPendingView({
         <p className="text-xs text-muted-foreground text-center mt-6">
           Questions? Contact us at{" "}
           <a
-            href="mailto:dean@sailfuture.org"
+            href={`mailto:${DEAN_EMAIL}`}
             className="text-primary underline underline-offset-2"
           >
-            dean@sailfuture.org
+            {DEAN_EMAIL}
           </a>{" "}
           or call{" "}
           <a
@@ -525,10 +530,10 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
         <p className="text-xs text-muted-foreground text-center mt-6">
           If you have any questions, please contact us at{" "}
           <a
-            href="mailto:dean@sailfuture.org"
+            href={`mailto:${DEAN_EMAIL}`}
             className="text-primary underline underline-offset-2"
           >
-            dean@sailfuture.org
+            {DEAN_EMAIL}
           </a>{" "}
           or call{" "}
           <a
@@ -1001,24 +1006,27 @@ export default function YearOverviewPage() {
           <div className="rounded-xl bg-background p-5 shadow-sm border text-center">
             <p className="text-sm font-medium mb-1">Have questions?</p>
             <p className="text-sm text-muted-foreground">
-              Contact Ms. Laura Manke at{" "}
+              Contact {HELP_CONTACT.name} at{" "}
               <a
-                href="mailto:admissions@sailfuture.org"
+                href={`mailto:${ADMISSIONS_EMAIL}`}
                 className="text-primary underline underline-offset-2"
               >
-                admissions@sailfuture.org
+                {ADMISSIONS_EMAIL}
               </a>{" "}
               or call{" "}
-              {/* `whitespace-nowrap` on every phone link on this page: a
+              {/* The office Main Line, like every other screen (it was a
+                  staff member's own number here).
+
+                  `whitespace-nowrap` on every phone link on this page: a
                   number is one unit. Left to wrap, a phone-width card
-                  broke it after the hyphen ("(813) 505-" / "3539").
-                  The whole number now moves to the next line instead;
-                  at about 100px wide it can't overflow the card. */}
+                  broke it after the hyphen. The whole number now moves
+                  to the next line instead; at about 100px wide it can't
+                  overflow the card. */}
               <a
-                href="tel:+18135053539"
+                href={`tel:${MAIN_LINE}`}
                 className="text-primary underline underline-offset-2 whitespace-nowrap"
               >
-                (813) 505-3539
+                {MAIN_LINE_DISPLAY}
               </a>
               .
             </p>
@@ -1183,19 +1191,19 @@ export default function YearOverviewPage() {
           </div>
 
           <p className="text-xs text-muted-foreground text-center mt-6">
-            Questions? Contact Ms. Laura Manke at{" "}
+            Questions? Contact {HELP_CONTACT.name} at{" "}
             <a
-              href="mailto:admissions@sailfuture.org"
+              href={`mailto:${ADMISSIONS_EMAIL}`}
               className="text-primary underline underline-offset-2"
             >
-              admissions@sailfuture.org
+              {ADMISSIONS_EMAIL}
             </a>{" "}
             or call{" "}
             <a
-              href="tel:+18135053539"
+              href={`tel:${MAIN_LINE}`}
               className="text-primary underline underline-offset-2 whitespace-nowrap"
             >
-              (813) 505-3539
+              {MAIN_LINE_DISPLAY}
             </a>
             .
           </p>
@@ -1307,10 +1315,10 @@ export default function YearOverviewPage() {
         <p className="text-xs text-muted-foreground text-center mt-6">
           If you require assistance with your application, please contact us at{" "}
           <a
-            href="mailto:dean@sailfuture.org"
+            href={`mailto:${ADMISSIONS_EMAIL}`}
             className="text-primary underline underline-offset-2"
           >
-            dean@sailfuture.org
+            {ADMISSIONS_EMAIL}
           </a>{" "}
           or call{" "}
           <a

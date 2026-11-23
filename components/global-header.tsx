@@ -7,6 +7,7 @@ import { UserButton } from "@clerk/nextjs";
 import { useFamily, useSchoolYears, useStudents } from "@/hooks/use-api";
 import { familyNameWithStudents } from "@/lib/family-name";
 import { MAIN_LINE, MAIN_LINE_DISPLAY } from "@/lib/school-phones";
+import { parentContactEmail } from "@/lib/school-contacts";
 
 const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours", "lunch-letter"]);
 
@@ -112,6 +113,8 @@ export function GlobalHeader() {
   const years = yearsData as SchoolYear[] | undefined;
   const schoolYear = yearId && years ? years.find((y) => y.id === yearId) : null;
   const yearName = schoolYear?.year_name ?? null;
+
+  const contactEmail = parentContactEmail(isDashboard || isRegistrationFlow);
 
   const title = isDashboard
     ? "SailFuture Academy Parent Dashboard"
@@ -221,11 +224,14 @@ export function GlobalHeader() {
           <div className="hidden flex-col items-end text-xs md:flex">
             <span className="font-semibold text-foreground">Questions?</span>
             <div className="flex items-center gap-1.5 text-muted-foreground">
+              {/* By stage (lib/school-contacts.ts): admissions while
+                  applying, the dean's office on the registration steps
+                  and the enrolled dashboard. */}
               <a
-                href="mailto:admissions@sailfuture.org"
+                href={`mailto:${contactEmail}`}
                 className="hover:text-primary transition-colors"
               >
-                admissions@sailfuture.org
+                {contactEmail}
               </a>
               <span aria-hidden="true">&bull;</span>
               <a

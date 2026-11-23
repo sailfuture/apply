@@ -17,10 +17,16 @@ import type { MetadataRoute } from "next";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "SailFuture Academy Admin",
-    short_name: "SFA Admin",
+    // One manifest serves everyone who installs the site, parents as
+    // well as staff, so the name can't say "Admin": a parent who added
+    // the portal to their phone got an icon labelled "SFA Admin".
+    // Phones cut the label under an icon at about 12 characters, so
+    // this reads "SailFuture A…" there; the full name shows in the
+    // install prompt, the splash screen and the app switcher.
+    name: "SailFuture Academy Portal",
+    short_name: "SailFuture Academy Portal",
     description:
-      "SailFuture Academy admissions, registration, and family messaging.",
+      "SailFuture Academy applications, registration, tuition and family messaging.",
     // Land on the inbox: the phone use case is reading and replying to
     // parent texts, not browsing the dashboard.
     start_url: "/admin/messages",

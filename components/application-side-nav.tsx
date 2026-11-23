@@ -6,6 +6,7 @@ import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Mail, Phone, HelpCircle, ArrowLeft } from "lucide-react";
 import { ParentNotesSheet } from "@/components/parent-notes-sheet";
 import { MAIN_LINE } from "@/lib/school-phones";
+import { ADMISSIONS_EMAIL, parentContactEmail } from "@/lib/school-contacts";
 
 /* Short labels for the side nav — keeps everything single-line */
 const SHORT_LABELS: Record<string, string> = {
@@ -101,11 +102,16 @@ export function ApplicationSideNavPanel({
   submit,
   loading = false,
   onDashboard,
+  supportEmail = ADMISSIONS_EMAIL,
 }: {
   items: SideNavStepItem[];
   submit?: SideNavSubmitItem;
   loading?: boolean;
   onDashboard: () => void;
+  /** Where "Email Support" writes to. Follows the family's stage
+   *  (lib/school-contacts.ts): admissions while applying, the dean's
+   *  office from acceptance on. */
+  supportEmail?: string;
 }) {
   return (
     // The `<aside>` is a width-reserving placeholder in the flex layout
@@ -226,7 +232,7 @@ export function ApplicationSideNavPanel({
                 component's internal length check. */}
             <ParentNotesSheet variant="row" />
             <a
-              href="mailto:admissions@sailfuture.org"
+              href={`mailto:${supportEmail}`}
               className="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
             >
               <Mail className="size-4 shrink-0" />
@@ -318,6 +324,8 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
       submit={submit}
       loading={stepsLoading}
       onDashboard={() => router.push(overviewPath)}
+      // The registration steps belong to an accepted family.
+      supportEmail={parentContactEmail(isRegistrationPage)}
     />
   );
 }

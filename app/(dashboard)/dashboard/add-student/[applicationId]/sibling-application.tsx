@@ -10,6 +10,7 @@ import {
 } from "@/components/application-side-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { DEAN_EMAIL } from "@/lib/school-contacts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -498,6 +499,8 @@ export function SiblingApplication({
               onClick: handleNavSubmit,
             }}
             onDashboard={() => router.push("/dashboard")}
+            // Adding a student is something an enrolled family does.
+            supportEmail={DEAN_EMAIL}
           />
         }
         mobileNav={mobileNav}
