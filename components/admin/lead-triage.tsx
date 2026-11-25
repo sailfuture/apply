@@ -68,6 +68,7 @@ import {
 import { LeadTourButton } from "@/components/admin/tour-section";
 import { NurturePauseButton } from "@/components/admin/nurture-pause-button";
 import { StarRating } from "@/components/admin/star-rating";
+import { RecruitmentEventPicker } from "@/components/admin/recruitment-event-picker";
 import { cn } from "@/lib/utils";
 
 /**
@@ -1911,6 +1912,13 @@ export function LeadTriageSheet({
                 onChanged={onChanged}
               />
             ) : null}
+            {/* The outreach event this lead came from — events come
+                from the recruitment site. */}
+            <RecruitmentEventPicker
+              key={`event-${scope.source}-${scope.id}`}
+              source={scope.source}
+              id={scope.id}
+            />
             {/* Duplicate links — a folded lead has no field of its
                 own (the banner up top covers it). */}
             {links && !links.linked_to ? (

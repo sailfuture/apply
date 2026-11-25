@@ -69,6 +69,7 @@ import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
 import { LinkedLeadsButton } from "@/components/admin/linked-leads-button";
+import { RecruitmentEventPicker } from "@/components/admin/recruitment-event-picker";
 import {
   MoveApplicationYearButton,
   StartingTermField,
@@ -746,6 +747,13 @@ export default function FamilyDetailPage() {
                 jumps to the lead's triage sheet on All Leads. Hidden
                 when no lead is linked (family-scoped, not per-year). */}
             <LinkedLeadsButton familyId={Number(familyId)} />
+            {/* The recruitment event this applicant came from (falls
+                back to the converted lead's event). */}
+            <RecruitmentEventPicker
+              source="family"
+              id={Number(familyId)}
+              variant="button"
+            />
             {yearId ? (
               <FamilyDecisionActions
                 familyId={Number(familyId)}
